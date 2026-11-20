@@ -132,6 +132,12 @@ export class UI {
       hint: document.getElementById('hint-bar'),
       modalRoot: document.getElementById('modal-root'),
       modal: document.getElementById('modal'),
+      buildBar: document.getElementById('build-bar'),
+      bbSlots: document.getElementById('bb-slots'),
+      bbHint: document.getElementById('bb-hint'),
+      footerVersion: document.getElementById('footer-version'),
+      footerUpdate: document.getElementById('footer-update'),
+      footerUpdateBtn: document.getElementById('footer-update-btn'),
       modalBackdrop: document.getElementById('modal-backdrop'),
       victoryFill: document.getElementById('victory-fill'),
       victoryYou: document.getElementById('victory-you'),
@@ -184,6 +190,16 @@ export class UI {
     document.getElementById('btn-pause').addEventListener('click', () => {
       this.h.setSpeed(this.state && !this.state.paused ? 0 : 1);
     });
+
+    this.el.bbSlots.addEventListener('click', (ev) => {
+      const slot = ev.target.closest('.bb-slot');
+      if (!slot) return;
+      this.h.toggleBuildSlot(slot.dataset.key);
+    });
+
+    if (this.el.footerUpdateBtn) {
+      this.el.footerUpdateBtn.addEventListener('click', () => this.h.installUpdate());
+    }
 
     document.getElementById('btn-menu').addEventListener('click', () => this.openMenu());
     document.getElementById('btn-help').addEventListener('click', () => this.openHelp());
@@ -374,10 +390,95 @@ export class UI {
     this.el.victoryPct.textContent = pct(share, 1);
 
     this.updateSpeedButtons(state);
+    this.renderBuildBar(state);
     this.updateRankList(state);
     this.updateFeed(state);
     this.updateInspector(state);
     this.updateHint(state);
+  }
+
+  /** Build hotbar: every placable structure, with live affordability. */
+  renderBuildBar(state) {
+    if (!this.el.bbSlots) return;
+    const keys = Object.keys(BUILDINGS);
+    const nation = state ? state.nations[state.playerNationId] : null;
+    const signature = `${keys.join(',')}|${this.buildMode || ''}`;
+    if (signature !== this._bbSignature) {
+      this._bbSignature = signature;
+      this.el.bbSlots.innerHTML = keys
+        .map((key, index) => {
+          const def = BUILDINGS[key];
+          const active = this.buildMode === key ? ' active' : '';
+          return `
+            <button class="bb-slot${active}" data-key="${key}" title="${def.name} — ${def.blurb}">
+              <span class="bb-key">${index + 1}</span>
+              ${icon(def.icon)}
+              <span class="bb-name">${def.name}</span>
+              <span class="bb-cost">${def.cost}g</span>
+            </button>`;
+        })
+        .join('');
+    }
+    if (nation) {
+      this.el.bbSlots.querySelectorAll('.bb-slot').forEach((slot) => {
+        const def = BUILDINGS[slot.dataset.key];
+        slot.classList.toggle('poor', !def || nation.gold < def.cost);
+      });
+    }
+    if (this.el.bbHint) {
+      this.el.bbHint.classList.toggle('placing', !!this.buildMode);
+      this.el.bbHint.textContent = this.buildMode
+        ? `PLACING ${BUILDINGS[this.buildMode].name.toUpperCase()} — CLICK YOUR PROVINCE · ESC CANCELS`
+        : 'Pick a structure, then click one of your provinces · keys 1-6';
+    }
+  }
+
+  setBuildMode(key) {
+    this.buildMode = key || null;
+    this._bbSignature = '';
+    if (this.state) this.renderBuildBar(this.state);
+  }
+
+  setVersion(version) {
+    if (this.el.footerVersion && version) this.el.footerVersion.textContent = `v${version}`;
+  }
+
+  setUpdateStatus(status) {
+    const el = this.el.footerUpdate;
+    const btn = this.el.footerUpdateBtn;
+    if (!el) return;
+    el.className = '';
+    if (btn) btn.classList.add('hidden');
+    switch (status.state) {
+      case 'checking':
+        el.textContent = 'checking for updates…';
+        break;
+      case 'available':
+        el.textContent = `update v${status.version} found`;
+        el.classList.add('available');
+        break;
+      case 'downloading':
+        el.textContent = `downloading update ${status.percent ?? 0}%`;
+        el.classList.add('available');
+        break;
+      case 'ready':
+        el.textContent = `v${status.version} ready`;
+        el.classList.add('available');
+        if (btn) btn.classList.remove('hidden');
+        break;
+      case 'current':
+        el.textContent = 'up to date';
+        break;
+      case 'error':
+        el.textContent = 'update check failed';
+        el.classList.add('error');
+        break;
+      case 'unsupported':
+        el.textContent = 'browser build';
+        break;
+      default:
+        el.textContent = status.message || '';
+    }
   }
 
   updateSpeedButtons(state) {

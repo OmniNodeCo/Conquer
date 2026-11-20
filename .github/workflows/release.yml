@@ -1,0 +1,181 @@
+name: Release
+
+# Builds the desktop installers for Windows, macOS and Linux and attaches them to
+# a GitHub Release when a version tag is pushed:
+#
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# Running the workflow manually only produces build artifacts (no release).
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '22'
+  # Never let electron-builder hunt for a local identity: certificates come from
+  # secrets only. With no secrets the artifacts are built unsigned instead of
+  # failing, which is what you want on a fork.
+  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Logic, save and packaging tests
+        run: npm test
+
+      - name: Headless UI smoke test
+        run: npm run test:ui
+
+      - name: Upload rendered map frames
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: tmp-shots/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows (x64)
+            os: windows-latest
+            artifact: conquer-windows-x64
+            target: --win
+          - name: macOS (arm64 + x64)
+            os: macos-14
+            artifact: conquer-macos
+            target: --mac
+          - name: Linux (x64)
+            os: ubuntu-latest
+            artifact: conquer-linux-x64
+            target: --linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build installers
+        env:
+          # Windows Authenticode certificate (.pfx path, base64 blob or https URL)
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          # macOS Developer ID certificate + notarization credentials
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder ${{ matrix.target }} --publish never
+
+      - name: Verify the Windows signature
+        if: matrix.target == '--win'
+        shell: pwsh
+        env:
+          WIN_CERT: ${{ secrets.WIN_CSC_LINK }}
+        run: |
+          if (-not $env:WIN_CERT) {
+            Write-Host 'No WIN_CSC_LINK secret: the installer is unsigned (expected on forks).'
+            exit 0
+          }
+          Get-ChildItem release -Filter *.exe -Recurse | ForEach-Object {
+            $sig = Get-AuthenticodeSignature $_.FullName
+            Write-Host "$($_.Name): $($sig.Status)"
+            if ($sig.Status -ne 'Valid') { throw "Invalid signature on $($_.Name)" }
+          }
+
+      - name: Verify the macOS signature
+        if: matrix.target == '--mac'
+        env:
+          MAC_CERT: ${{ secrets.MAC_CSC_LINK }}
+        run: |
+          if [ -z "$MAC_CERT" ]; then
+            echo "No MAC_CSC_LINK secret: the app is unsigned (expected on forks)."
+            exit 0
+          fi
+          APP=$(find release -maxdepth 3 -name "*.app" | head -n 1)
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          spctl --assess --type execute -vv "$APP"
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p out
+          shopt -s nullglob
+          for f in release/*.exe release/*.zip release/*.dmg release/*.AppImage release/*.deb release/*.blockmap release/*.yml release/*.json; do
+            cp "$f" out/
+          done
+          ls -lh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          ls -lh
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Conquer: Rule the Globe $TAG" \
+              --generate-notes
+          fi

@@ -8,6 +8,27 @@ const { resolveAppPath } = require('./serve.cjs');
 const isDev = !app.isPackaged;
 let mainWindow = null;
 
+// electron-updater is optional: if it is missing (e.g. a source checkout without
+// the production dependencies) the game still runs, it just cannot self-update.
+let updaterRef = null;
+function loadUpdater() {
+  if (updaterRef !== null) return updaterRef || null;
+  try {
+    // eslint-disable-next-line global-require
+    updaterRef = require('electron-updater').autoUpdater;
+  } catch (err) {
+    console.warn('[conquer] auto-updater unavailable:', err.message);
+    updaterRef = false;
+  }
+  return updaterRef || null;
+}
+
+function sendUpdate(status) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update:status', status);
+  }
+}
+
 // The game is served from a custom "app://" origin instead of file:// so that the
 // page has a real, securable origin. A file:// page has an opaque origin, which
 // makes `script-src 'self'` in index.html reject the game's module scripts.
@@ -113,6 +134,48 @@ function serveAppFiles() {
   });
 }
 
+// Auto-updates come from the GitHub Releases published by release.yml. The
+// updater only runs in a packaged build; a dev checkout reports "browser build"
+// in the footer instead of hammering the API.
+function setupAutoUpdater() {
+  const updater = loadUpdater();
+  if (!updater) {
+    sendUpdate({ state: 'unsupported', message: 'updater unavailable' });
+    return;
+  }
+  updater.autoDownload = true;
+  updater.autoInstallOnAppQuit = true;
+  updater.logger = null;
+
+  updater.on('checking-for-update', () => sendUpdate({ state: 'checking' }));
+  updater.on('update-available', (info) => sendUpdate({ state: 'available', version: info?.version }));
+  updater.on('update-not-available', () => sendUpdate({ state: 'current' }));
+  updater.on('download-progress', (progress) =>
+    sendUpdate({ state: 'downloading', percent: Math.round(progress?.percent || 0) })
+  );
+  updater.on('update-downloaded', (info) => sendUpdate({ state: 'ready', version: info?.version }));
+  updater.on('error', (err) => {
+    console.warn('[conquer] update error:', err?.message || err);
+    sendUpdate({ state: 'error', message: String(err?.message || err) });
+  });
+
+  const check = () => {
+    if (!app.isPackaged) {
+      sendUpdate({ state: 'unsupported', message: 'development build' });
+      return;
+    }
+    updater.checkForUpdates().catch((err) => {
+      sendUpdate({ state: 'error', message: String(err?.message || err) });
+    });
+  };
+
+  app.whenReady().then(() => {
+    setTimeout(check, 4000);
+    setInterval(check, 6 * 60 * 60 * 1000);
+  });
+  return { check, updater };
+}
+
 function buildMenu() {
   const template = [
     {
@@ -151,6 +214,7 @@ if (!gotLock) {
     serveAppFiles();
     buildMenu();
     createWindow();
+    setupAutoUpdater();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -191,6 +255,25 @@ ipcMain.handle('game:toggle-fullscreen', () => {
   if (!mainWindow) return false;
   mainWindow.setFullScreen(!mainWindow.isFullScreen());
   return mainWindow.isFullScreen();
+});
+
+ipcMain.handle('update:check', async () => {
+  const updater = loadUpdater();
+  if (!updater) return { ok: false, error: 'updater-unavailable' };
+  if (!app.isPackaged) return { ok: false, error: 'not-packaged' };
+  try {
+    const result = await updater.checkForUpdates();
+    return { ok: true, version: result?.updateInfo?.version || null };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+
+ipcMain.handle('update:install', () => {
+  const updater = loadUpdater();
+  if (!updater || !app.isPackaged) return false;
+  updater.quitAndInstall();
+  return true;
 });
 
 ipcMain.handle('app:info', () => ({

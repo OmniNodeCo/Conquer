@@ -9,4 +9,12 @@ contextBridge.exposeInMainWorld('desktop', {
   quit: () => ipcRenderer.invoke('game:quit'),
   toggleFullscreen: () => ipcRenderer.invoke('game:toggle-fullscreen'),
   info: () => ipcRenderer.invoke('app:info'),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on('update:status', listener);
+    return () => ipcRenderer.removeListener('update:status', listener);
+  },
 });

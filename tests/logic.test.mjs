@@ -7,6 +7,7 @@ import {
   VICTORY_SHARE,
   TUNING,
   attackableSources,
+  quickAttack,
   beginAttack,
   build,
   canAttack,
@@ -102,7 +103,7 @@ test('new games start with sensible resources', () => {
   assert.ok(nationProvinces(state, 0).length >= 1);
   for (const prov of state.provinces) {
     assert.ok(prov.troops > 0, `${prov.name} has a garrison`);
-    assert.deepEqual(prov.buildings, { city: 0, fort: 0, port: 0, factory: 0, silo: 0 });
+    assert.deepEqual(prov.buildings, { city: 0, fort: 0, port: 0, factory: 0, silo: 0, aa: 0 });
   }
 });
 
@@ -268,6 +269,73 @@ test('attacking captures provinces and moves the army', () => {
   assert.equal(target.nationId, state.playerNationId, 'province captured');
   assert.ok(own.troops === 100);
   assert.ok(state.stats.provincesTaken >= 1);
+});
+
+test('one tap on a province sends a slice of the army', () => {
+  const state = freshGame();
+  const player = state.player;
+  const mine = state.provinces.find(
+    (p) => p.nationId === player.id && p.neighbours.some((id) => state.provinces[id].nationId !== player.id)
+  );
+  assert.ok(mine, 'player has a frontier province');
+  mine.troops = 40;
+  const targetId = mine.neighbours.find((id) => state.provinces[id].nationId !== player.id);
+  const target = state.provinces[targetId];
+  target.troops = 4;
+
+  const res = quickAttack(state, player.id, target, 0.25);
+  assert.equal(res.ok, true);
+  assert.ok(res.sent > 9 && res.sent < 11, `tap sends a quarter of the garrison, got ${res.sent}`);
+  assert.ok(mine.troops <= 30.1, 'the army is deducted on the tap');
+  assert.ok(player.stats.troopsLost > 0, 'and soldiers die doing it');
+
+  const empty = state.provinces.find(
+    (p) => p.nationId !== player.id && !attackableSources(state, player.id, p).length
+  );
+  if (empty) {
+    const far = quickAttack(state, player.id, empty, 0.25);
+    assert.equal(far.ok, false);
+    assert.match(far.reason, /border/i);
+  }
+});
+
+test('an AA battery can shoot down a warhead', () => {
+  const state = freshGame();
+  const player = state.player;
+  const target = state.provinces.find((p) => p.nationId !== player.id);
+  const owner = target.nationId;
+  target.buildings.aa = 2;
+  const before = target.troops;
+  const popBefore = target.population;
+  player.nukes = 2;
+
+  state.rng = () => 0; // force the intercept roll
+  const shot = launchNuke(state, player.id, target);
+  assert.equal(shot.ok, true);
+  assert.equal(shot.intercepted, true);
+  // Only the conventional mobilisation penalty applies, not a warhead hit.
+  assert.ok(target.troops > before * 0.85, `no nuclear damage (${before} -> ${target.troops})`);
+  assert.equal(target.population, popBefore, 'an intercepted strike leaves the population intact');
+  assert.equal(player.nukes, 1, 'the missile is still spent');
+
+  // Without batteries the same strike lands.
+  target.buildings.aa = 0;
+  const hit = launchNuke(state, player.id, target);
+  assert.equal(hit.intercepted, undefined);
+  assert.ok(target.troops < before * 0.5, 'unescorted warheads still level a province');
+  assert.ok(state.nations[owner].relations[player.id] < 0, 'and the world notices');
+});
+
+test('castles and AA batteries harden a province', () => {
+  const state = freshGame();
+  const prov = state.provinces.find((p) => p.nationId !== null);
+  const base = defenseMultiplier(prov);
+  prov.buildings.fort = 1;
+  const withCastle = defenseMultiplier(prov);
+  prov.buildings.aa = 1;
+  const withAA = defenseMultiplier(prov);
+  assert.ok(withCastle > base, 'a castle adds defence');
+  assert.ok(withAA > withCastle, 'an AA battery adds a little more');
 });
 
 test('war, truce and alliance gate attacks', () => {

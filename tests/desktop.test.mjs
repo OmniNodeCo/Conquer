@@ -92,7 +92,6 @@ test('the ES module graph from main.js resolves to real files', () => {
 test('build config asks for a signed Windows and macOS release', () => {
   const win = pkg.build.win;
   assert.equal(win.signtoolOptions.publisherName, 'Conquer Studio');
-  assert.equal(win.publisherName, 'Conquer Studio');
   assert.equal(win.signAndEditExecutable, true);
   assert.ok(win.target.some((t) => t.target === 'nsis'), 'needs an installer target');
   assert.ok(win.icon.endsWith('icon.ico'));
@@ -144,6 +143,76 @@ test('icon assets exist with valid headers', () => {
   }
   assert.ok(sizes.includes(256), `ICO needs a 256px entry, got ${sizes.join(',')}`);
   assert.ok(sizes.includes(16) && sizes.includes(32) && sizes.includes(48));
+});
+
+test('the footer version and the package version cannot drift', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const meta = html.match(/<meta name="app-version" content="([^"]+)"/);
+  assert.ok(meta, 'index.html needs an app-version meta tag');
+  assert.equal(meta[1], pkg.version, 'app-version meta must match package.json');
+});
+
+test('auto-updates are wired to the GitHub releases', () => {
+  assert.ok(pkg.dependencies['electron-updater'], 'electron-updater must be a runtime dependency');
+  assert.ok(!pkg.devDependencies['electron-updater'], 'it cannot live in devDependencies or packaging drops it');
+  const [provider] = pkg.build.publish || [];
+  assert.ok(provider, 'build.publish is required for update metadata');
+  assert.equal(provider.provider, 'github');
+  assert.equal(provider.owner, 'OmniNodeCo');
+  assert.equal(provider.repo, 'Conquer');
+
+  const main = fs.readFileSync(path.join(ROOT, 'electron/main.cjs'), 'utf8');
+  const preload = fs.readFileSync(path.join(ROOT, 'electron/preload.cjs'), 'utf8');
+  for (const channel of ['update:check', 'update:install', 'update:status']) {
+    assert.ok(main.includes(channel) && preload.includes(channel), `missing updater channel ${channel}`);
+  }
+  assert.match(main, /require\('electron-updater'\)/, 'main process must load the updater');
+  assert.match(main, /quitAndInstall/, 'the shell must be able to install an update');
+  assert.match(preload, /onUpdateStatus/, 'the renderer needs update events');
+  // The updater is optional at runtime: a missing module must not break the game.
+  assert.match(main, /try \{[\s\S]{0,200}electron-updater/);
+});
+
+test('the electron-builder config validates against its own schema', () => {
+  // electron-builder ships the JSON schema it enforces at pack time. Catching a
+  // bad key here is much cheaper than catching it in a release build.
+  const schemaPath = path.join(ROOT, 'node_modules/app-builder-lib/scheme.json');
+  if (!fs.existsSync(schemaPath)) return; // dependencies not installed yet
+  const Ajv = require('ajv');
+  const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+  const validate = new Ajv({ allErrors: true, strict: false }).compile(schema);
+  const ok = validate(pkg.build);
+  assert.ok(ok, `invalid build config: ${JSON.stringify(validate.errors?.slice(0, 4))}`);
+  // publisherName only exists inside signtoolOptions in electron-builder 26.
+  assert.equal(pkg.build.win.publisherName, undefined);
+});
+
+test('release workflow builds all three platforms and can sign them', () => {
+  const file = path.join(ROOT, '.github/workflows/release.yml');
+  assert.ok(fs.existsSync(file), 'release workflow missing');
+  const yml = fs.readFileSync(file, 'utf8');
+  for (const needed of [
+    'workflow_dispatch',
+    "tags:",
+    'windows-latest',
+    'macos-14',
+    'ubuntu-latest',
+    '--win',
+    '--mac',
+    '--linux',
+    'WIN_CSC_LINK',
+    'WIN_CSC_KEY_PASSWORD',
+    'MAC_CSC_LINK',
+    'APPLE_ID',
+    'APPLE_APP_SPECIFIC_PASSWORD',
+    'APPLE_TEAM_ID',
+    'actions/upload-artifact',
+    'gh release create',
+    'npm test',
+  ]) {
+    assert.ok(yml.includes(needed), `release workflow is missing ${needed}`);
+  }
+  assert.ok(!/\bsecrets\.[A-Z_]+\s*!=\s*''/.test(yml), 'secrets are not allowed in step if-expressions');
 });
 
 test('packaged file list covers source, assets and the electron shell', () => {

@@ -18,11 +18,19 @@ export const BUILDINGS = {
   },
   fort: {
     key: 'fort',
-    name: 'Fort',
+    name: 'Castle',
     icon: 'fort',
     cost: 50,
     max: 3,
     blurb: '+28% defence per level',
+  },
+  aa: {
+    key: 'aa',
+    name: 'AA Battery',
+    icon: 'aa',
+    cost: 120,
+    max: 2,
+    blurb: 'Shoots down incoming warheads (35% +25% per level)',
   },
   port: {
     key: 'port',
@@ -144,7 +152,7 @@ export function createGame({
   // Runtime province state.
   for (const prov of world.provinces) {
     const isCapitol = world.nations.some((n) => n.capitalId === prov.id);
-    prov.buildings = { city: 0, fort: 0, port: 0, factory: 0, silo: 0 };
+    prov.buildings = { city: 0, fort: 0, port: 0, factory: 0, silo: 0, aa: 0 };
     prov.isCapital = isCapitol;
     prov.nukeTarget = false;
     prov.captureTime = 0;
@@ -281,6 +289,7 @@ export function defenseMultiplier(prov) {
     1 +
     terrain.defense +
     0.28 * (prov.buildings.fort || 0) +
+    0.06 * (prov.buildings.aa || 0) +
     (prov.isCapital ? 0.18 : 0) +
     (prov.buildings.port ? 0.08 : 0)
   );
@@ -566,6 +575,27 @@ export function beginAttack(state, nationId, sourceProv, targetProv, troops, nav
   return { ok: true, naval: false, result, sent: send };
 }
 
+/**
+ * One-click assault used by tapping a province on the map: a chunk of the
+ * strongest available source marches immediately.
+ */
+export function quickAttack(state, nationId, targetProv, share = 0.25) {
+  if (!targetProv) return { ok: false, reason: 'No target' };
+  // Respect alliances and truces: a stray tap must not start a forbidden war.
+  const check = canAttack(state, nationId, targetProv);
+  if (!check.ok) return check;
+  const sources = check.sources;
+  if (!sources.length) return { ok: false, reason: 'No troops on that border' };
+  const ordered = [...sources].sort((a, b) => b.prov.troops - a.prov.troops);
+  const pick = ordered[0];
+  const available = pick.prov.troops * share;
+  if (available < 0.6) return { ok: false, reason: 'Garrison too thin to attack' };
+  const sent = Math.max(0.6, available);
+  const res = beginAttack(state, nationId, pick.prov, targetProv, sent, pick.naval);
+  if (!res.ok) return res;
+  return { ...res, source: pick.prov, sent, naval: pick.naval };
+}
+
 export function resolveAttackNow(state, { nationId, sourceProv, targetProv, troops, naval }) {
   const attacker = state.nations[nationId];
   const defenderId = targetProv.nationId;
@@ -736,6 +766,28 @@ export function launchNuke(state, nationId, targetProv) {
       if (prov.nationId === defenderId) prov.troops *= 0.9;
     }
   }
+  // Anti-air batteries can knock the warhead out of the sky before it lands.
+  const aaLevel = targetProv.buildings.aa || 0;
+  if (aaLevel > 0) {
+    const interceptChance = Math.min(0.85, 0.35 + 0.25 * aaLevel);
+    if (state.rng() < interceptChance) {
+      addEffect(state, {
+        type: 'battle',
+        x: targetProv.centroid[0],
+        y: targetProv.centroid[1],
+        win: false,
+        ttl: 1.8,
+      });
+      pushLog(
+        state,
+        `${targetProv.name}'s AA battery shoots down a ${nation.name} warhead.`,
+        'nuke',
+        targetProv.id
+      );
+      return { ok: true, intercepted: true };
+    }
+  }
+
   targetProv.troops *= 0.12;
   targetProv.population = Math.max(0.2, targetProv.population * 0.72);
   targetProv.value = Math.max(0.6, targetProv.value * 0.7);

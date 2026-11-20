@@ -4,6 +4,9 @@ import { JSDOM } from 'jsdom';
 import { createCanvas } from '@napi-rs/canvas';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
+// Only used as a predicate in the harness; the game itself runs inside jsdom.
+const { canAttack } = await import('../src/game/state.js');
+
 const errors = [];
 const logs = [];
 const html = readFileSync('index.html', 'utf8');
@@ -355,6 +358,67 @@ app.handlers.load();
 await wait(1800);
 assert(!!app.state && app.state.day === savedDay, `load restores campaign (day ${app.state.day} vs ${savedDay})`);
 assert(app.screen === 'game', 'still in game after load');
+
+// --- build hotbar ---------------------------------------------------------
+// The save/load check above replaced app.state, so re-bind the livePlayer.
+const livePlayer = app.state.nations[app.state.playerNationId];
+const bbSlots = document.querySelectorAll('#bb-slots .bb-slot');
+assert(bbSlots.length >= 5, `build hotbar rendered (${bbSlots.length} slots)`);
+assert(document.querySelectorAll('#bb-slots .bb-slot[data-key="aa"]').length === 1, 'AA battery slot present');
+assert(document.querySelector('#bb-slots .bb-slot[data-key="fort"]')?.textContent.includes('Castle'), 'castle slot present');
+assert(document.getElementById('bb-hint').textContent.length > 0, 'hotbar hint visible');
+
+const castleSlot = document.querySelector('#bb-slots .bb-slot[data-key="fort"]');
+const spendBefore = livePlayer.gold;
+const ownForBuild = app.state.provinces.find((p) => p.nationId === livePlayer.id && p.id !== capital.id);
+livePlayer.gold = 900;
+castleSlot.click();
+assert(app.buildMode === 'fort', 'clicking a slot arms placement mode');
+assert(document.getElementById('bb-hint').classList.contains('placing'), 'hotbar shows placement state');
+app.handlers.clickProvince(ownForBuild.id);
+await wait(120);
+assert(ownForBuild.buildings.fort === 1, 'clicking a province places the castle');
+assert(livePlayer.gold < 900, 'placing a castle costs gold');
+assert(app.buildMode === 'fort', 'placement stays armed for rapid building');
+app.cancelBuildMode();
+assert(app.buildMode === null, 'escape/cancel leaves placement mode');
+
+// --- tap to conquer -------------------------------------------------------
+let frontProv = null;
+let tapTarget = null;
+for (const prov of app.state.provinces) {
+  if (prov.nationId !== livePlayer.id) continue;
+  for (const nb of prov.neighbours) {
+    const cand = app.state.provinces[nb];
+    if (cand.nationId !== livePlayer.id && canAttack(app.state, livePlayer.id, cand).ok) {
+      frontProv = prov;
+      tapTarget = cand;
+      break;
+    }
+  }
+  if (frontProv) break;
+}
+assert(!!frontProv && !!tapTarget, 'found a province that can be tapped');
+frontProv.troops = 40;
+tapTarget.troops = 3;
+const tapTargetId = tapTarget.id;
+const tapLossesBefore = livePlayer.stats.troopsLost;
+app.state.paused = true;
+app.handlers.clickProvince(tapTarget.id);
+assert(app.state.provinces[tapTargetId].nationId === livePlayer.id || livePlayer.stats.troopsLost > tapLossesBefore,
+  'a single tap on enemy land launches an assault');
+assert(frontProv.troops < 40, `the tap costs soldiers (${frontProv.troops.toFixed(1)} left)`);
+assert(document.querySelector('#battle-report.show'), 'tap-to-conquer shows the battle card');
+app.state.paused = false;
+livePlayer.gold = spendBefore;
+
+// --- version footer -------------------------------------------------------
+const versionMeta = document.querySelector('meta[name="app-version"]');
+assert(!!versionMeta, 'app version meta present');
+const footerVersion = document.getElementById('footer-version');
+assert(footerVersion.textContent.trim() === `v${versionMeta.content}`, `footer shows version (${footerVersion.textContent})`);
+const footerUpdate = document.getElementById('footer-update');
+assert(footerUpdate.textContent.includes('browser build'), `footer reports update state (${footerUpdate.textContent})`);
 
 // --- run a longer war to shake out AI ------------------------------------
 app.state.paused = false;

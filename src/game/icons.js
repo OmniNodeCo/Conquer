@@ -32,6 +32,7 @@ export const ICONS = {
   factory: wrap(`
     <path d="M3.6 20.4h16.8V9.4l-5 3.2V9.4l-5 3.2V6.6H6.2v13.8z"/>
     <path d="M6.4 3.4h3M17 4.4v3"/>`),
+  aa: wrap(`<path d="M12 3.2v6.4M9 6.6h6"/><path d="M7 10.2h10l1.4 3.2H5.6z"/><path d="M9.4 13.4v7.4M14.6 13.4v7.4"/>`),
   silo: wrap(`
     <path d="M12 3.2v6.4M12 9.6c-3.2 0-5.4 2-5.4 4.6v6.2h10.8v-6.2c0-2.6-2.2-4.6-5.4-4.6z"/>
     <path d="M9.4 6.4h5.2M4.6 20.4h14.8"/>`),

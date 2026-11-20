@@ -1229,3 +1229,102 @@ option,
 /* Slightly larger hit boxes now that the type is blockier. */
 .icon-btn { min-width: 32px; height: 30px; font-size: 12px; }
 .nation-chip, .res, .stat-cell { border-width: 2px; }
+
+/* =========================================================================
+   BUILD HOTBAR + VERSION FOOTER
+   ========================================================================= */
+#build-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 52px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.bb-slots {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--panel-solid);
+  border: 2px solid var(--line);
+  box-shadow: var(--shadow-panel);
+  pointer-events: auto;
+}
+
+.bb-slot {
+  position: relative;
+  width: 74px;
+  padding: 6px 4px 5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: #0d1b28;
+  border: 2px solid transparent;
+  color: var(--muted-2);
+  cursor: pointer;
+}
+.bb-slot:hover { background: #16324a; border-color: var(--gold-dim); color: var(--text); }
+.bb-slot.active { background: #1d3d22; border-color: var(--green); color: #d8f5e0; }
+.bb-slot.poor { opacity: 0.42; }
+.bb-slot svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+.bb-name { font-family: var(--display); font-size: 8px; letter-spacing: 0.04em; text-transform: uppercase; }
+.bb-cost { font-family: var(--mono); font-size: 12px; color: var(--gold); }
+.bb-key {
+  position: absolute;
+  top: 1px;
+  left: 3px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.bb-hint {
+  font-family: var(--display);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: rgba(4, 9, 15, 0.86);
+  border: 2px solid var(--line);
+  padding: 3px 8px;
+}
+.bb-hint.placing { color: #c9f5d3; border-color: var(--green); }
+
+#app-footer {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 32;
+  font-family: var(--display);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: rgba(4, 9, 15, 0.82);
+  border: 2px solid var(--line-soft);
+  padding: 3px 8px;
+  pointer-events: auto;
+}
+#app-footer .footer-brand { color: var(--gold-dim); }
+#footer-version { color: var(--text); }
+#footer-update { color: var(--muted); }
+#footer-update.available { color: var(--gold-bright); }
+#footer-update.error { color: var(--red-soft); }
+#footer-update-btn {
+  font-family: var(--display);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  background: var(--gold);
+  border: 2px solid #8f6f28;
+  color: #0b1219;
+}
+#footer-update-btn:hover { background: var(--gold-bright); }

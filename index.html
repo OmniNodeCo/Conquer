@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+  <meta name="app-version" content="1.0.0" />
   <title>Conquer: Rule the Globe</title>
   <link rel="stylesheet" href="src/styles/main.css" />
 </head>
@@ -112,7 +113,20 @@
       <div id="feed" class="panel"></div>
 
       <div id="toasts"></div>
+
+      <div id="build-bar">
+        <div class="bb-slots" id="bb-slots"></div>
+        <div class="bb-hint" id="bb-hint">Pick a structure, then click one of your provinces</div>
+      </div>
+
       <div id="hint-bar"></div>
+
+      <footer id="app-footer">
+        <span class="footer-brand">CONQUER</span>
+        <span id="footer-version">v1.0.0</span>
+        <span id="footer-update">checking for updates…</span>
+        <button id="footer-update-btn" class="hidden">RESTART TO UPDATE</button>
+      </footer>
     </div>
 
     <!-- ============================== SCREENS ============================== -->

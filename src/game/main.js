@@ -14,6 +14,9 @@ import {
   startNuke,
   launchNuke,
   makePeace,
+  quickAttack,
+  canBuild,
+  BUILDINGS,
   nationProvinces,
   worldShare,
   pushLog,
@@ -54,10 +57,30 @@ class App {
 
     this.bindInput();
     this.bindWindow();
+    this.initFooter();
     this.resize();
     this.view.fitWorld();
     this.showTitle();
     requestAnimationFrame((ts) => this.loop(ts));
+  }
+
+  // ------------------------------------------------------- version / updater
+  initFooter() {
+    const meta = document.querySelector('meta[name="app-version"]');
+    const fallback = meta?.content || '1.0.0';
+    this.ui.setVersion(fallback);
+    if (!window.desktop?.onUpdateStatus) {
+      this.ui.setUpdateStatus({ state: 'unsupported' });
+      return;
+    }
+    this.ui.setUpdateStatus({ state: 'checking' });
+    window.desktop.onUpdateStatus((status) => this.ui.setUpdateStatus(status || {}));
+    if (window.desktop.info) {
+      window.desktop.info().then((info) => {
+        if (info?.version) this.ui.setVersion(info.version);
+      }).catch(() => {});
+    }
+    if (window.desktop.checkForUpdates) window.desktop.checkForUpdates();
   }
 
   // ---------------------------------------------------------------- settings
@@ -208,6 +231,7 @@ class App {
         this.setNukeMode(false);
         return;
       }
+      if (this.cancelBuildMode()) return;
       if (this.state?.selectedProvinceId !== null) {
         this.deselect();
         return;
@@ -227,8 +251,15 @@ class App {
         this.handlers.setSpeed(this.state.paused ? 1 : 0);
         break;
       case '1':
-        this.handlers.setSpeed(1);
+      case '2':
+      case '3':
+      case '4':
+      case '5':
+      case '6': {
+        const key = Object.keys(BUILDINGS)[Number(ev.key) - 1];
+        if (key) this.handlers.toggleBuildSlot(key);
         break;
+      }
       case 'f':
       case 'F':
         this.focusCapital();
@@ -296,6 +327,63 @@ class App {
     }
   }
 
+  // ------------------------------------------------- tap-to-conquer helpers
+  quickAssault(id) {
+    const state = this.state;
+    const target = state.provinces[id];
+    const res = quickAttack(state, state.playerNationId, target);
+    if (!res.ok) {
+      this.ui.toast(res.reason, 'loss');
+      return;
+    }
+    if (res.naval) {
+      this.audio.naval();
+      this.ui.toast(`Fleet away — ${Math.round(res.sent * 1000).toLocaleString()} men at sea.`, 'info', '⚓');
+      this.ui.update(state, 0);
+      return;
+    }
+    this.audio.cannon();
+    if (res.result) {
+      this.ui.battleReport(state, target, res.result);
+    }
+    this.ui.markDirty();
+    this.ui.update(state, 0);
+  }
+
+  placeBuild(id) {
+    const state = this.state;
+    const prov = state.provinces[id];
+    const key = this.buildMode;
+    if (!key) return;
+    if (prov.nationId !== state.playerNationId) {
+      this.ui.toast('You can only build inside your own borders.', 'loss');
+      return;
+    }
+    const res = build(state, state.playerNationId, prov, key);
+    if (!res.ok) {
+      this.ui.toast(res.reason, 'loss');
+      return;
+    }
+    this.audio.cash();
+    this.ui.toast(`${BUILDINGS[key].name} raised in ${prov.name}.`, 'info', '◆');
+    this.ui.markDirty();
+    this.handlers.selectProvince(id);
+    // Stay in placement mode for rapid building, but drop it when gold runs out.
+    if (state.nations[state.playerNationId].gold < BUILDINGS[key].cost) {
+      this.buildMode = null;
+      this.ui.setBuildMode(null);
+    }
+    this.ui.update(state, 0);
+  }
+
+  cancelBuildMode() {
+    if (!this.buildMode) return false;
+    this.buildMode = null;
+    this.ui.setBuildMode(null);
+    this.ui.update(this.state, 0);
+    return true;
+  }
+
   handleMapClick(sx, sy) {
     if (!this.world) return;
     const [wx, wy] = this.view.screenToWorld(sx, sy);
@@ -308,7 +396,7 @@ class App {
       this.confirmNuke(prov);
       return;
     }
-    this.handlers.selectProvince(prov.id);
+    this.handlers.clickProvince(prov.id);
   }
 
   // -------------------------------------------------------------- game flow
@@ -496,6 +584,34 @@ class App {
   buildHandlers() {
     const self = this;
     this.handlers = {
+      /**
+       * A single tap on the map. Own land selects (or receives a structure when
+       * a hotbar slot is armed); anything else immediately sends a slice of the
+       * nearest army at it.
+       */
+      clickProvince(id) {
+        if (!self.state) return;
+        const prov = self.state.provinces[id];
+        if (!prov) return;
+        if (self.buildMode) {
+          self.placeBuild(id);
+          return;
+        }
+        self.handlers.selectProvince(id);
+        if (prov.nationId === self.state.playerNationId) return;
+        if (self.state.gameOver) return;
+        self.quickAssault(id);
+      },
+      toggleBuildSlot(key) {
+        if (!self.state || !BUILDINGS[key]) return;
+        self.buildMode = self.buildMode === key ? null : key;
+        self.ui.setBuildMode(self.buildMode);
+        if (self.buildMode) self.ui.toast(`${BUILDINGS[key].name} — click one of your provinces.`, 'info', '◆');
+        self.ui.update(self.state, 0);
+      },
+      installUpdate() {
+        if (window.desktop?.installUpdate) window.desktop.installUpdate();
+      },
       selectProvince(id) {
         if (!self.state) return;
         const prov = self.state.provinces[id];

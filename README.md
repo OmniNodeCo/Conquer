@@ -30,6 +30,20 @@ generated world (26 nations, ~165 provinces, deterministic per seed).
   troop blocks, and label plates are square with a hard offset text shadow.
 - **26 playable nations** across 3 difficulties, each with a capital, flag, government
   type and AI personality (aggressive / turtle / opportunist / diplomat).
+- **Tap to conquer** — a single click on foreign land immediately sends a quarter of
+  the strongest army on that border. Clicking again sends another slice; if the
+  defenders hold, those men are lost. No slider, no confirmation dialog.
+- **Build hotbar** — a bar along the bottom holds every structure (City, Castle,
+  Port, Factory, Missile Silo, AA Battery, keys `1`-`6`). Arm a slot, then click
+  your own provinces to place; placement stays armed for rapid building and
+  disarms itself when you run out of gold.
+- **AA batteries** — a new defensive building: each level has a 35% + 25% chance
+  (capped at 85%) of shooting an incoming warhead out of the sky, and it stiffens
+  the province's defence.
+- **Version footer with auto-updates** — the bottom-right corner shows the running
+  version and the updater state (checking / update found / downloading / ready).
+  Packaged builds query the GitHub Releases published by the release workflow and
+  install on restart.
 - **Province economy** — tax income, manpower, supply and upkeep, city / port /
   factory / silo construction, recruit & reinforce.
 - **Real combat costs** — *every* assault kills soldiers. Even a walkover against a
@@ -57,15 +71,30 @@ generated world (26 nations, ~165 provinces, deterministic per seed).
 | Click province | Inspect it / select your source province |
 | Drag, scroll | Pan, zoom |
 | `Space` | Pause / resume (single speed) |
+| `1`-`6` | Arm a build hotbar slot |
+| Click enemy land | Attack / conquer it |
 | `F` | Focus your capital |
 | `H` | How to play |
 | `Esc` | Deselect, then menu |
 | `F11` | Fullscreen |
 | `F12` | DevTools (development builds only) |
 
-Attack flow: click a foreign province → pick a border province (or a port for a sea
-invasion) → drag the troop slider → **ATTACK**. The slider panel shows the win chance
-*and* the men it expects you to bury before you commit.
+Attack flow: **click a foreign province** — that is the attack. A quarter of your
+strongest bordering army marches immediately (a port province will sail instead).
+Click repeatedly to press the assault; the battle card reports the casualties each
+time. The inspector still offers a manual slider for a full-commitment attack.
+
+Building: press a hotbar key (`1`-`6`) or click a slot, then click one of your
+provinces. `Esc` cancels placement.
+
+| Hotbar | Structure |
+| --- | --- |
+| `1` | City — income and manpower |
+| `2` | Castle — +28% defence per level |
+| `3` | AA Battery — intercepts warheads |
+| `4` | Port — naval invasions |
+| `5` | Factory — cheaper recruits, more income |
+| `6` | Missile Silo — unlocks warheads |
 
 ## Running it
 
@@ -85,6 +114,7 @@ npm run dev          # http://localhost:5173
 ```bash
 npm test             # 27 headless assertions: worldgen, economy, combat, saves, packaging
 npm run test:ui      # boots the real index.html in jsdom, plays a full campaign turn
+npm run build:web    # browser build in release/web (serve it with scripts/serve.mjs)
 ```
 
 `npm run test:ui` drives the actual UI — starts a campaign, recruits, builds, attacks,
@@ -104,14 +134,78 @@ npm run pack         # unpacked app in release/ (fast smoke test)
 npm run dist:win     # NSIS installer + zip  (build/icon.ico)
 npm run dist:mac     # DMG, x64 + arm64, hardened runtime (build/icon.icns)
 npm run dist:linux   # AppImage + deb
+npm run build:web    # runnable browser build -> release/web + release/*.tar.gz
 npm run icons        # rebuild PNG/ICO/ICNS from assets/icon-pixel-src.png
 ```
+
+The `build` block in `package.json` is validated against electron-builder's own
+JSON schema by `npm test` (this is how the `win.publisherName` → `signtoolOptions`
+migration was caught), so a bad packaging key fails in CI rather than at release
+time.
 
 The game is served from a custom **`app://conquer/`** origin instead of `file://`.
 A `file://` page has an opaque origin, which makes the strict CSP in `index.html`
 (`script-src 'self'`) reject the game's ES modules; a registered standard, secure
 scheme gives the page a real origin while still shipping as a plain static bundle.
 If the scheme ever fails to load, `main.cjs` falls back to `loadFile()`.
+
+## Auto-updates
+
+`electron/main.cjs` wires `electron-updater` to the GitHub Releases that the
+release workflow produces (`build.publish` → `OmniNodeCo/Conquer`). In a packaged
+build the app checks a few seconds after launch and then every six hours, streams
+progress to the renderer over the `update:status` channel, and shows the result in
+the bottom-right footer:
+
+| Footer | Meaning |
+| --- | --- |
+| `up to date` | running the newest release |
+| `update v1.2.0 found` / `downloading update 42%` | fetching in the background |
+| `v1.2.0 ready` + **RESTART TO UPDATE** | downloaded, `quitAndInstall` on click |
+| `update check failed` | network/API problem — the game keeps running |
+| `browser build` | not packaged (or updater missing), so no self-update |
+
+The updater module is loaded inside a `try`/`catch`, so a source checkout without
+production dependencies still runs; it simply reports `browser build`. Versions
+must be bumped in **both** `package.json` and the `app-version` meta tag in
+`index.html` — a test fails if the two drift apart.
+
+## Releasing
+
+`.github/workflows/release.yml` is the whole pipeline. It runs on every `v*` tag
+push (and on demand via *Run workflow*):
+
+1. **Verify** — `npm ci`, `npm test`, `npm run test:ui` on Ubuntu; the rendered
+   map frames are uploaded as an artifact.
+2. **Build** — a three-way matrix: `windows-latest` (`--win`), `macos-14`
+   (`--mac`, arm64 + x64 DMGs) and `ubuntu-latest` (`--linux`), each running
+   `electron-builder --publish never` and uploading installers as artifacts.
+   Signing secrets are passed per platform; **when they are absent the build is
+   simply unsigned**, so forks and pull requests still produce artifacts.
+3. **Publish** — on a tag, all artifacts (including the `latest*.yml` update
+   manifests electron-updater reads) are downloaded, checksummed into
+   `SHA256SUMS.txt` and attached to the GitHub Release with `gh release create`
+   (re-running the job uploads with `--clobber` instead of failing).
+
+Cut a release with:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Repository secrets used by the workflow:
+
+| Secret | Platform | Purpose |
+| --- | --- | --- |
+| `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` | Windows | Authenticode `.pfx` (path, base64 or https URL) |
+| `MAC_CSC_LINK` / `MAC_CSC_KEY_PASSWORD` | macOS | Developer ID `.p12` |
+| `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` | macOS | Notarization |
+| `GITHUB_TOKEN` (automatic) | all | Uploading release assets |
+
+The workflow also verifies the produced binaries when a certificate is present
+(`Get-AuthenticodeSignature` on Windows, `codesign --verify` + `spctl --assess`
+on macOS) and skips that step cleanly when it is not.
 
 ## Code signing
 
@@ -159,6 +253,13 @@ xcrun stapler validate release/*.dmg
 ```
 
 ### Honest status
+
+`npx electron-builder --dir` gets as far as resolving the app, validating the
+config and running `@electron/rebuild`, then fails while fetching the Electron
+binary — this sandbox's egress proxy cannot verify the download host's
+certificate, so **no installer can be produced here**. That is why the local
+build target is `npm run build:web` and the desktop installers come from the
+release workflow, which runs on GitHub-hosted runners.
 
 No code-signing certificate exists in this sandbox (and no certificate authority will
 issue one for an unsigned demo project), so the artifacts you can build here are
