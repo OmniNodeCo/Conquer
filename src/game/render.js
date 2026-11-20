@@ -4,7 +4,7 @@
 
 import { TERRAIN } from './worldgen.js';
 import { clamp } from './geom.js';
-import { mix, darken, lighten, withAlpha, readable } from './color.js';
+import { mix, darken, lighten, withAlpha } from './color.js';
 
 const TAU = Math.PI * 2;
 
@@ -312,13 +312,12 @@ export class MapView {
     ctx.translate(-cam.x, -cam.y);
 
     // ---- pixel layer: the whole political map, blocky by construction
-    const layer = this.politicalLayer(state);
+    const layer = this.politicalLayer(state, selectedId, hoveredId);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(layer, 0, 0, world.width, world.height);
     ctx.imageSmoothingEnabled = true;
 
     // ---- crisp interaction layer on top of the blocks
-    this.drawSelection(selectedId, hoveredId, zoom);
     this.drawAttackPreview(state, zoom);
     this.drawExpeditions(state, zoom);
     ctx.restore();
@@ -341,7 +340,7 @@ export class MapView {
     const terrain = TERRAIN[prov.terrain] || TERRAIN.plains;
     let fill = mix(baseColor, terrain.color, nation ? 0.16 : 0.3);
     if (!nation) fill = mix(fill, '#33404b', 0.12);
-    return readable(fill, 0.3);
+    return fill;
   }
 
   /** 0..1 progress of the blocky takeover sweep, or 1 when nothing is happening. */
@@ -352,7 +351,7 @@ export class MapView {
     return age / TAKEOVER_TIME;
   }
 
-  politicalLayer(state) {
+  politicalLayer(state, selectedId = null, hoveredId = null) {
     const world = this.world;
     const P = this.pixelScale;
     const w = Math.ceil(world.width / P);
@@ -365,7 +364,7 @@ export class MapView {
       this.politicalKey = null;
     }
 
-    const ownerKey = this.ownerKeyOf(state);
+    const ownerKey = `${this.ownerKeyOf(state)}|${selectedId}|${hoveredId}`;
     const sweeping = state.provinces.some((p) => this.takeoverProgress(state, p) < 1);
     if (ownerKey === this.politicalKey && !sweeping) return canvas;
     this.politicalKey = ownerKey;
@@ -386,7 +385,9 @@ export class MapView {
     // Political fills, with a blocky wipe for provinces taken moments ago.
     for (const prov of world.provinces) {
       const box = prov.bbox;
-      const fill = this.provinceFill(state, prov);
+      let fill = this.provinceFill(state, prov);
+      if (prov.id === selectedId) fill = lighten(fill, 0.18);
+      else if (prov.id === hoveredId) fill = lighten(fill, 0.1);
       const progress = this.takeoverProgress(state, prov);
 
       if (progress >= 1) {
@@ -463,6 +464,25 @@ export class MapView {
       pctx.stroke();
     }
 
+    // Selected / hovered provinces get a hard block outline, no glow.
+    const outline = (prov, color, width) => {
+      pctx.beginPath();
+      for (const ring of prov.parts) {
+        pctx.moveTo(ring[0][0], ring[0][1]);
+        for (let i = 1; i < ring.length; i += 1) pctx.lineTo(ring[i][0], ring[i][1]);
+        pctx.closePath();
+      }
+      pctx.strokeStyle = color;
+      pctx.lineWidth = width;
+      pctx.stroke();
+    };
+    if (hoveredId !== null && hoveredId !== undefined && hoveredId !== selectedId && world.provinces[hoveredId]) {
+      outline(world.provinces[hoveredId], 'rgba(255, 255, 255, 0.75)', P);
+    }
+    if (selectedId !== null && selectedId !== undefined && world.provinces[selectedId]) {
+      outline(world.provinces[selectedId], '#ffe27a', P * 1.5);
+    }
+
     pctx.restore();
     return canvas;
   }
@@ -475,6 +495,43 @@ export class MapView {
       ctx.closePath();
     }
     ctx.fill();
+  }
+
+  drawExpeditions(state, zoom) {
+    const ctx = this.ctx;
+    const world = this.world;
+    for (const exp of state.expeditions) {
+      const from = world.provinces[exp.fromId];
+      const to = world.provinces[exp.toId];
+      const t = clamp((state.time - exp.startTime) / Math.max(0.01, exp.arriveTime - exp.startTime), 0, 1);
+      const sx = from.centroid[0];
+      const sy = from.centroid[1];
+      const tx = to.centroid[0];
+      const ty = to.centroid[1];
+      const mx = (sx + tx) / 2;
+      const my = (sy + ty) / 2 - Math.hypot(tx - sx, ty - sy) * 0.28;
+      const px = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * mx + t * t * tx;
+      const py = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * my + t * t * ty;
+      const nation = state.nations[exp.nationId];
+      ctx.save();
+      ctx.setLineDash([7 / zoom, 7 / zoom]);
+      ctx.strokeStyle = withAlpha(nation.color, 0.5);
+      ctx.lineWidth = 1.6 / zoom;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.quadraticCurveTo(mx, my, tx, ty);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#eaf2f8';
+      ctx.beginPath();
+      ctx.arc(px, py, 5 / zoom, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = nation.color;
+      ctx.beginPath();
+      ctx.arc(px, py, 3 / zoom, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
   }
 
   drawExpeditions(state, zoom) {
@@ -592,28 +649,78 @@ export class MapView {
     const target = this.attackTarget;
     const source = this.attackSource;
     if (!target || !source) return;
+
     const [sx, sy] = source.centroid;
     const [tx, ty] = target.centroid;
-    const curved = source.navalRoute;
+    const naval = source.navalRoute;
+
+    // Arrow drawn on a coarse grid so it reads as hand-placed pixel blocks.
+    const unit = 10 / zoom;
+    const snap = (v) => Math.round(v / unit) * unit;
+    const ax = snap(sx);
+    const ay = snap(sy);
+    const bx = snap(tx);
+    const by = snap(ty);
+    const midX = snap(naval ? bx : ax);
+    const pts = naval
+      ? [
+          [ax, ay],
+          [ax, snap(ay + (by - ay) * 0.35)],
+          [midX, snap(ay + (by - ay) * 0.65)],
+          [bx, by],
+        ]
+      : [
+          [ax, ay],
+          [midX, ay],
+          [midX, by],
+          [bx, by],
+        ];
+
+    const stroke = 'rgba(255, 214, 120, 0.9)';
     ctx.save();
-    ctx.setLineDash([9 / zoom, 8 / zoom]);
-    ctx.lineDashOffset = -(this.time * 26) / zoom;
-    ctx.strokeStyle = 'rgba(255, 214, 120, 0.85)';
-    ctx.lineWidth = 2.4 / zoom;
+    ctx.lineJoin = 'miter';
+    ctx.lineCap = 'butt';
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 4 / zoom;
     ctx.beginPath();
-    ctx.moveTo(sx, sy);
-    if (curved) {
-      const mx = (sx + tx) / 2 + (ty - sy) * 0.18;
-      const my = (sy + ty) / 2 - (tx - sx) * 0.18;
-      ctx.quadraticCurveTo(mx, my, tx, ty);
-    } else {
-      ctx.lineTo(tx, ty);
-    }
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i][0], pts[i][1]);
     ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(255, 214, 120, 0.95)';
+
+    // Marching blocks travelling along the arrow.
+    const segments = [];
+    let total = 0;
+    for (let i = 1; i < pts.length; i += 1) {
+      const len = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      segments.push({ from: pts[i - 1], to: pts[i], len, start: total });
+      total += len;
+    }
+    if (total > 1) {
+      const block = 7 / zoom;
+      ctx.fillStyle = '#fff2c4';
+      for (let k = 0; k < 4; k += 1) {
+        const d = ((this.time * total * 0.35 + k * (total / 4)) % total + total) % total;
+        const seg = segments.find((s2) => d >= s2.start && d <= s2.start + s2.len) || segments[segments.length - 1];
+        const t = seg.len > 0 ? (d - seg.start) / seg.len : 0;
+        const px2 = seg.from[0] + (seg.to[0] - seg.from[0]) * t;
+        const py2 = seg.from[1] + (seg.to[1] - seg.from[1]) * t;
+        ctx.fillRect(px2 - block / 2, py2 - block / 2, block, block);
+      }
+    }
+
+    // Square-headed arrow tip.
+    const last = pts[pts.length - 2];
+    const angle = Math.atan2(by - last[1], bx - last[0]);
+    const head = 13 / zoom;
+    ctx.translate(bx, by);
+    ctx.rotate(angle);
+    ctx.fillStyle = stroke;
     ctx.beginPath();
-    ctx.arc(tx, ty, 4 / zoom, 0, TAU);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-head, head * 0.72);
+    ctx.lineTo(-head * 0.55, 0);
+    ctx.lineTo(-head, -head * 0.72);
+    ctx.closePath();
     ctx.fill();
     ctx.restore();
   }
@@ -669,7 +776,7 @@ export class MapView {
         const [sx, sy] = this.worldToScreen(seat.centroid[0], seat.centroid[1]);
         const label = nation.name.toUpperCase();
         const isPlayer = nation.id === playerId;
-        ctx.font = `800 ${isPlayer ? 13 : 11.5}px "Inter", system-ui, sans-serif`;
+        ctx.font = `700 ${isPlayer ? 13 : 11.5}px "Pixelify Sans", "Inter", system-ui, sans-serif`;
         const textW = ctx.measureText(label).width;
         const plateW = textW + 20;
         const plateH = 19;
@@ -678,7 +785,7 @@ export class MapView {
         if (!fits(px, py, plateW, plateH)) continue;
         claim(px, py, plateW, plateH);
 
-        roundRect(ctx, px, py, plateW, plateH, 4);
+        roundRect(ctx, px, py, plateW, plateH, 0);
         ctx.fillStyle = 'rgba(6, 11, 16, 0.82)';
         ctx.fill();
         ctx.strokeStyle = isPlayer ? 'rgba(255, 226, 140, 0.95)' : withAlpha(nation.color, 0.8);
@@ -709,14 +816,14 @@ export class MapView {
         const by = sy + 8;
         if (!fits(bx, by, w, h, 2)) continue;
         claim(bx, by, w, h);
-        roundRect(ctx, bx, by, w, h, 3.5);
+        roundRect(ctx, bx, by, w, h, 0);
         ctx.fillStyle = 'rgba(6, 10, 15, 0.8)';
         ctx.fill();
         ctx.strokeStyle = nation ? withAlpha(nation.color, 0.85) : 'rgba(150, 160, 170, 0.45)';
         ctx.lineWidth = 1;
         ctx.stroke();
         ctx.fillStyle = '#eaf1f7';
-        ctx.font = '600 10px "Inter", system-ui, sans-serif';
+        ctx.font = '13px "VT323", "Pixelify Sans", monospace';
         ctx.fillText(label, sx, by + h / 2 + 0.5);
         if (prov.buildings && prov.buildings.silo > 0) {
           ctx.fillStyle = '#ffcf5c';
@@ -738,7 +845,7 @@ export class MapView {
         if (screenW < 62) continue;
         const [sx, sy] = this.worldToScreen(prov.centroid[0], prov.centroid[1]);
         const size = clamp(screenW * 0.08, 8.5, 11.5);
-        ctx.font = `600 ${size}px "Inter", system-ui, sans-serif`;
+        ctx.font = `600 ${size}px "Pixelify Sans", "Inter", system-ui, sans-serif`;
         const w = ctx.measureText(prov.name.toUpperCase()).width;
         const bx = sx - w / 2;
         const by = sy - 12;
@@ -746,10 +853,11 @@ export class MapView {
         claim(bx, by, w, size + 3);
         const nation = prov.nationId === null ? null : state.nations[prov.nationId];
         ctx.fillStyle = nation ? 'rgba(252, 249, 240, 0.92)' : 'rgba(213, 219, 225, 0.6)';
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
-        ctx.shadowBlur = 4;
+        // Hard offset shadow, no blur: the text stays pixel-crisp.
+        ctx.fillStyle = 'rgba(3, 7, 11, 0.85)';
+        ctx.fillText(prov.name.toUpperCase(), sx + 1.5, by + size / 2 + 2.5);
+        ctx.fillStyle = nation ? 'rgba(252, 249, 240, 0.95)' : 'rgba(213, 219, 225, 0.6)';
         ctx.fillText(prov.name.toUpperCase(), sx, by + size / 2 + 1);
-        ctx.shadowBlur = 0;
       }
     }
     ctx.restore();
@@ -923,9 +1031,17 @@ export function fillRingsInto(rings, buffer, w, h, scale, value) {
   }
 }
 
-export function roundRect(ctx, x, y, w, h, r) {
+/**
+ * Label plates are deliberately square: the map is pixel art, so every panel on
+ * it gets hard corners. The radius argument is kept for call-site compatibility.
+ */
+export function roundRect(ctx, x, y, w, h, r = 0) {
   const radius = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
+  if (radius <= 0) {
+    ctx.rect(x, y, w, h);
+    return;
+  }
   ctx.moveTo(x + radius, y);
   ctx.lineTo(x + w - radius, y);
   ctx.quadraticCurveTo(x + w, y, x + w, y + radius);

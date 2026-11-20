@@ -107,6 +107,24 @@ test('build config asks for a signed Windows and macOS release', () => {
   assert.match(plist, /com\.apple\.security\.cs\.allow-jit/);
 });
 
+test('the pixel skin ships self-hosted fonts', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src/styles/main.css'), 'utf8');
+  for (const family of ['Pixelify Sans', 'VT323', 'Silkscreen']) {
+    assert.ok(css.includes(`font-family: '${family}'`), `missing @font-face for ${family}`);
+  }
+  const refs = [...css.matchAll(/url\('\.\.\/\.\.\/(assets\/fonts\/[^']+)'\)/g)].map((m) => m[1]);
+  assert.ok(refs.length >= 4, `expected self-hosted font files, found ${refs.length}`);
+  for (const ref of refs) {
+    const file = path.join(ROOT, ref);
+    assert.ok(fs.existsSync(file), `missing font file ${ref}`);
+    assert.equal(fs.readFileSync(file).subarray(0, 4).toString('latin1'), 'wOF2', `${ref} is not a woff2`);
+  }
+  // No remote font/CDN references anywhere: the game must run offline.
+  assert.ok(!/https?:\/\//.test(css), 'stylesheet must not fetch anything remotely');
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  assert.match(html, /default-src 'self'/, 'CSP default-src must cover font-src');
+});
+
 test('icon assets exist with valid headers', () => {
   const ico = path.join(ROOT, pkg.build.win.icon);
   const icns = path.join(ROOT, pkg.build.mac.icon);

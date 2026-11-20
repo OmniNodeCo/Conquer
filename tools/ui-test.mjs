@@ -210,6 +210,7 @@ assert(app.view.pixelScale >= 3, `map renders in pixel blocks (${app.view.pixelS
 assert(!!app.view.politicalCanvas, 'pixel layer allocated');
 assert(app.view.politicalCanvas.width < app.view.canvas.width, 'pixel layer is low resolution');
 assert(app.view.politicalKey !== null, 'pixel layer cached against ownership');
+assert(String(app.view.politicalKey).includes('|'), 'selection is baked into the pixel layer');
 assert(document.querySelectorAll('#toasts .toast').length <= 1, 'single-slot notifications');
 
 // --- one steady pace: no 1x/2x/4x multipliers ---------------------------

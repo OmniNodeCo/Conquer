@@ -13,6 +13,11 @@ generated world (26 nations, ~165 provinces, deterministic per seed).
 
 - **Procedural earth-like world** — value-noise terrain, marching-squares coastlines,
   rivers, mountain ranges, deserts and tundra. Every campaign has a new map.
+- **Pixel-art everything** — the map, the HUD and the title screen share one art
+  direction: square corners, flat fills, hard offset shadows, chunky bars and a
+  self-hosted bitmap typeface (Pixelify Sans for UI, VT323 for numbers, Silkscreen
+  for headings). No gradients, no blur, no rounded corners, no CDN fonts — the
+  whole game is offline and self-contained.
 - **Pixel-art map** — the political layer is rasterised into a world-anchored block
   grid (one block = 4 world units) and scaled up with smoothing disabled, so
   coastlines, borders and the banded sea stay chunky at every zoom level instead of
@@ -20,6 +25,9 @@ generated world (26 nations, ~165 provinces, deterministic per seed).
   rebuilt when the map changes or a takeover is playing.
 - **Pixelated takeovers** — capturing a province paints the new flag across it in a
   blocky sweep over ~0.9s, old colours still visible under the advancing edge.
+- **Blocky interaction cues** — selection and hover are hard block outlines baked
+  into the map layer, attack orders draw as stepped, snapped arrows with marching
+  troop blocks, and label plates are square with a hard offset text shadow.
 - **26 playable nations** across 3 difficulties, each with a capital, flag, government
   type and AI personality (aggressive / turtle / opportunist / diplomat).
 - **Province economy** — tax income, manpower, supply and upkeep, city / port /
@@ -163,7 +171,7 @@ machine that holds the certificate.
 
 ```
 index.html                 shell, HUD, title screen, modals
-src/styles/main.css        all styling (no framework, no network fonts)
+src/styles/main.css        all styling + the pixel skin (no framework, no network fonts)
 src/game/worldgen.js       terrain + province generation (deterministic seed)
 src/game/state.js          the simulation: economy, recruitment, combat, nukes, victory
 src/game/ai.js             AI nation behaviour and diplomacy
@@ -177,6 +185,8 @@ electron/serve.cjs         testable app:// path resolver
 build/                     icons (ico/icns/png set) + mac entitlements
 tests/                     node:test suites (logic + desktop packaging)
 tools/ui-test.mjs          jsdom end-to-end UI harness
+tools/pixelate.mjs         downsample + nearest upscale artwork to true pixel blocks
+assets/fonts/              self-hosted woff2 (Pixelify Sans, VT323, Silkscreen)
 ```
 
 Save data lives at:

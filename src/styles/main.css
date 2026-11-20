@@ -988,3 +988,200 @@ kbd {
 #battle-report .br-row.minus b { color: var(--red-soft); }
 
 .speed-control button#btn-pause { min-width: 40px; font-size: 11px; }
+
+/* =========================================================================
+   PIXEL SKIN
+   The whole interface is drawn like the map: square corners, flat fills, hard
+   offset shadows and a bitmap typeface. No gradients, no blur, no rounding.
+   ========================================================================= */
+@font-face {
+  font-family: 'Pixelify Sans';
+  src: url('../../assets/fonts/pixelify-regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Pixelify Sans';
+  src: url('../../assets/fonts/pixelify-semibold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Pixelify Sans';
+  src: url('../../assets/fonts/pixelify-bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'VT323';
+  src: url('../../assets/fonts/vt323.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Silkscreen';
+  src: url('../../assets/fonts/silkscreen-bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --font: 'Pixelify Sans', 'Inter', ui-monospace, monospace;
+  --display: 'Silkscreen', 'Pixelify Sans', monospace;
+  --mono: 'VT323', ui-monospace, monospace;
+  --radius: 0px;
+  --bg-deep: #04090f;
+  --bg: #061019;
+  --panel: #0a1622;
+  --panel-solid: #0a1622;
+  --panel-raised: #102133;
+  --line: #2a4257;
+  --line-soft: #1d3142;
+  --gold: #f0c250;
+  --gold-bright: #ffdc8a;
+  --gold-dim: #a5842f;
+  --shadow-panel: 3px 3px 0 rgba(2, 6, 10, 0.85);
+}
+
+*, *::before, *::after { border-radius: 0 !important; }
+
+html, body {
+  font-family: var(--font);
+  font-size: 14px;
+}
+
+/* The pixel font needs a touch more room than Inter in dense panels. */
+.insp-note, .feed-item, .modal p, .modal li, .title-sub, .title-body, .howto p {
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* ------------------------------------------------------------- surfaces */
+.panel,
+#topbar,
+#rank-panel,
+#inspector,
+#battle-report,
+#hint-bar,
+.modal,
+.toast,
+.nation-card,
+.attack-box,
+.stat-cell,
+.build-btn,
+.feed-item,
+.diplo-row {
+  background: var(--panel-solid) !important;
+  border: 2px solid var(--line) !important;
+  box-shadow: var(--shadow-panel) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+#victory-track,
+.insp-head,
+.rank-head,
+.panel-head,
+#modal-backdrop {
+  background: transparent !important;
+}
+
+.stat-grid { gap: 2px; }
+.stat-cell { padding: 6px 10px; }
+
+/* -------------------------------------------------------------- controls */
+.btn, .icon-btn, .build-btn, .link, .seg button, .speed-control button, .nation-card .pick {
+  font-family: var(--display);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--panel-raised);
+  border: 2px solid var(--line);
+  color: var(--text);
+  box-shadow: 2px 2px 0 rgba(2, 6, 10, 0.8);
+  transition: none;
+}
+.btn:hover, .icon-btn:hover, .build-btn:hover, .seg button:hover { background: #17324a; border-color: var(--gold-dim); }
+.btn:active, .icon-btn:active, .build-btn:active, .seg button:active {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+.btn.primary { background: var(--gold); border-color: #8f6f28; color: #0b1219; }
+.btn.primary:hover { background: var(--gold-bright); }
+.btn.danger { background: #a8382f; border-color: #6d2019; color: #ffe6e2; }
+.btn.danger:hover { background: #c2453a; }
+.btn:disabled, .build-btn:disabled { opacity: 0.4; }
+
+/* range sliders as chunky pixel rails */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 8px;
+  background: #16283a;
+  border: 2px solid var(--line);
+  box-shadow: none;
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 14px;
+  background: var(--gold);
+  border: 2px solid #8f6f28;
+  border-radius: 0;
+  box-shadow: none;
+}
+input[type='range']::-moz-range-thumb {
+  width: 12px; height: 14px; border-radius: 0;
+  background: var(--gold); border: 2px solid #8f6f28;
+}
+
+select.source-select, select {
+  font-family: var(--font);
+  background: #102133;
+  border: 2px solid var(--line);
+  color: var(--text);
+  box-shadow: 2px 2px 0 rgba(2, 6, 10, 0.8);
+}
+
+/* ---------------------------------------------------------------- bars */
+.track-rail { background: #122436 !important; border: 2px solid var(--line); height: 10px; }
+.track-fill { background: linear-gradient(90deg, var(--gold-dim), var(--gold)) !important; }
+.track-marker { background: #fff !important; width: 3px !important; }
+.rel-bar { background: #16283a !important; border-radius: 0 !important; }
+
+/* --------------------------------------------------------------- chrome */
+.brand-name {
+  font-family: var(--display);
+  font-size: 15px;
+  letter-spacing: 0.16em;
+  color: var(--gold-bright);
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.75);
+}
+#clock-date, #clock-speed, .res b, .stat-cell b, .rank-value, .slider-value, .odds {
+  font-family: var(--mono);
+  letter-spacing: 0.03em;
+}
+.insp-kicker, .track-label, .insp-section-title, .f-tag, .rank-tag, .modal-kicker {
+  font-family: var(--display);
+  letter-spacing: 0.1em;
+}
+.modal-title { font-family: var(--display); font-size: 13px; letter-spacing: 0.08em; }
+
+/* --------------------------------------------------------------- map fx */
+#map-fx {
+  background:
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.16) 0 1px, rgba(0, 0, 0, 0) 1px 3px),
+    radial-gradient(ellipse at 50% 45%, rgba(0, 0, 0, 0) 55%, rgba(2, 7, 12, 0.5) 100%);
+  mix-blend-mode: multiply;
+  opacity: 0.85;
+  image-rendering: pixelated;
+}
+
+/* ------------------------------------------------------------ title art */
+.title-bg { image-rendering: pixelated; }
+.title-bg, .title-art { filter: saturate(1.05) contrast(1.02); }
