@@ -104,7 +104,7 @@ npm run pack         # unpacked app in release/ (fast smoke test)
 npm run dist:win     # NSIS installer + zip  (build/icon.ico)
 npm run dist:mac     # DMG, x64 + arm64, hardened runtime (build/icon.icns)
 npm run dist:linux   # AppImage + deb
-npm run icons        # regenerate every icon from build/icon-1024.png
+npm run icons        # rebuild PNG/ICO/ICNS from assets/icon-pixel-src.png
 ```
 
 The game is served from a custom **`app://conquer/`** origin instead of `file://`.
@@ -187,6 +187,7 @@ tests/                     node:test suites (logic + desktop packaging)
 tools/ui-test.mjs          jsdom end-to-end UI harness
 tools/pixelate.mjs         downsample + nearest upscale artwork to true pixel blocks
 assets/fonts/              self-hosted woff2 (Pixelify Sans, VT323, Silkscreen)
+assets/icon-pixel-src.png  pixel-art icon source, snapped to a 96-block grid
 ```
 
 Save data lives at:

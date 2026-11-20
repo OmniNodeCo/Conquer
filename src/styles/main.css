@@ -1185,3 +1185,40 @@ select.source-select, select {
 /* ------------------------------------------------------------ title art */
 .title-bg { image-rendering: pixelated; }
 .title-bg, .title-art { filter: saturate(1.05) contrast(1.02); }
+
+/* -------------------------------------------------- pixel skin refinements */
+/* Silkscreen is a chunky 8px-grid face: reserve it for short control labels,
+   and use the narrower Pixelify for anything that can run long. */
+.btn.small,
+.build-btn,
+.link,
+.source-select,
+option,
+.nation-card .pick {
+  font-family: var(--font);
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.insp-section-title,
+.track-label,
+.insp-kicker,
+.modal-kicker,
+.f-tag,
+.rank-tag {
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.insp-section-title { display: flex; justify-content: space-between; gap: 8px; overflow: hidden; }
+.insp-section-title > span { overflow: hidden; text-overflow: ellipsis; }
+
+/* Buttons keep their label centred and clipped rather than spilling out. */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; overflow: hidden; }
+.btn.wide, .build-btn { width: 100%; }
+
+/* Slightly larger hit boxes now that the type is blockier. */
+.icon-btn { min-width: 32px; height: 30px; font-size: 12px; }
+.nation-chip, .res, .stat-cell { border-width: 2px; }

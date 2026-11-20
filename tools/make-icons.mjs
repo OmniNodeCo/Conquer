@@ -1,6 +1,27 @@
-// Generates the application icon set (PNG, ICO, ICNS) procedurally.
-import { createCanvas } from '@napi-rs/canvas';
-import { writeFileSync, mkdirSync } from 'node:fs';
+// Generates the application icon set (PNG, ICO, ICNS).
+// If a pixel-art source exists at assets/icon-pixel-src.png it is snapped to a
+// block grid and used for every size; otherwise the built-in procedural globe
+// is drawn instead.
+import { createCanvas, loadImage } from '@napi-rs/canvas';
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+
+const PIXEL_SOURCE = 'assets/icon-pixel-src.png';
+const BLOCKS = 96; // the source is snapped to a 96x96 block canvas
+
+let pixelBase = null;
+if (existsSync(PIXEL_SOURCE)) {
+  const img = await loadImage(readFileSync(PIXEL_SOURCE));
+  const low = createCanvas(BLOCKS, BLOCKS);
+  const lctx = low.getContext('2d');
+  lctx.imageSmoothingEnabled = true;
+  lctx.imageSmoothingQuality = 'high';
+  lctx.drawImage(img, 0, 0, BLOCKS, BLOCKS);
+
+  pixelBase = createCanvas(1024, 1024);
+  const bctx = pixelBase.getContext('2d');
+  bctx.imageSmoothingEnabled = false;
+  bctx.drawImage(low, 0, 0, 1024, 1024);
+}
 
 const GOLD = '#e9c46a';
 const GOLD_BRIGHT = '#f8dfa0';
@@ -9,6 +30,12 @@ const GOLD_DIM = '#b08d3f';
 function drawIcon(size) {
   const c = createCanvas(size, size);
   const ctx = c.getContext('2d');
+  if (pixelBase) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(pixelBase, 0, 0, size, size);
+    return c;
+  }
   const s = size / 1024; // design space is 1024px
   ctx.scale(s, s);
 
