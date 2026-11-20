@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+  <title>Conquer: Rule the Globe</title>
+  <link rel="stylesheet" href="src/styles/main.css" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="map" aria-label="World map"></canvas>
+    <div id="map-fx"></div>
+
+    <!-- ============================== IN-GAME HUD ============================== -->
+    <div id="hud" class="hidden">
+      <header id="topbar">
+        <div class="brand">
+          <span class="brand-mark">◆</span>
+          <span class="brand-name">CONQUER</span>
+        </div>
+
+        <div id="player-chip" class="nation-chip">
+          <span class="flag" id="player-flag"></span>
+          <span class="nation-text">
+            <b id="player-name">—</b>
+            <i id="player-gov">—</i>
+          </span>
+        </div>
+
+        <div class="resources">
+          <div class="res" title="Treasury / net income per second">
+            <span class="res-icon" data-icon="gold"></span>
+            <div>
+              <b id="stat-gold">0</b>
+              <i id="stat-income">+0.0/s</i>
+            </div>
+          </div>
+          <div class="res" title="Manpower available for recruitment">
+            <span class="res-icon" data-icon="manpower"></span>
+            <div>
+              <b id="stat-manpower">0</b>
+              <i id="stat-regen">+0.0/s</i>
+            </div>
+          </div>
+          <div class="res" title="Total army">
+            <span class="res-icon" data-icon="army"></span>
+            <div>
+              <b id="stat-army">0</b>
+              <i>standing army</i>
+            </div>
+          </div>
+          <div class="res" title="Provinces controlled">
+            <span class="res-icon" data-icon="province"></span>
+            <div>
+              <b id="stat-prov">0</b>
+              <i id="stat-share">0% of globe</i>
+            </div>
+          </div>
+        </div>
+
+        <div class="topbar-right">
+          <div class="clock">
+            <b id="clock-date">JAN 2026</b>
+            <i id="clock-speed">paused</i>
+          </div>
+          <div class="speed-control" id="speed-control">
+            <button id="btn-pause" data-pause title="Pause / resume (Space)">❚❚</button>
+          </div>
+          <button class="icon-btn" id="btn-help" title="How to play (H)">?</button>
+          <button class="icon-btn" id="btn-menu" title="Menu (Esc)">☰</button>
+        </div>
+      </header>
+
+      <div id="victory-track" title="Control 80% of the globe to win">
+        <div class="track-label"><span>WORLD DOMINATION</span><b id="victory-pct">0%</b></div>
+        <div class="track-rail">
+          <div class="track-fill" id="victory-fill"></div>
+          <div class="track-marker" id="victory-you"></div>
+          <div class="track-goal">80%</div>
+        </div>
+      </div>
+
+      <aside id="rank-panel" class="panel">
+        <div class="panel-head">
+          <h2>Great Powers</h2>
+          <span class="muted" id="rank-count"></span>
+        </div>
+        <ol id="rank-list"></ol>
+      </aside>
+
+      <aside id="inspector" class="panel hidden"></aside>
+
+      <div id="minimap-wrap">
+        <div class="minimap-head">
+          <span id="map-mode">WORLD MAP</span>
+          <div class="minimap-tools">
+            <button id="btn-zoom-out" title="Zoom out">−</button>
+            <button id="btn-zoom-in" title="Zoom in">+</button>
+            <button id="btn-reset-view" title="Reset view">⤢</button>
+          </div>
+        </div>
+        <canvas id="minimap"></canvas>
+        <div class="legend">
+          <span><i class="dot you"></i>You</span>
+          <span><i class="dot enemy"></i>At war</span>
+          <span><i class="dot ally"></i>Ally</span>
+          <span><i class="dot neutral"></i>Tribes</span>
+        </div>
+      </div>
+
+      <div id="feed" class="panel"></div>
+
+      <div id="toasts"></div>
+      <div id="hint-bar"></div>
+    </div>
+
+    <!-- ============================== SCREENS ============================== -->
+    <section id="screen-title" class="screen">
+      <div class="title-bg"></div>
+      <div class="title-content">
+        <div class="title-kicker">A GRAND STRATEGY CAMPAIGN</div>
+        <h1>CONQUER<span>RULE THE GLOBE</span></h1>
+        <p class="title-blurb">
+          Take command of one nation among many. Build an economy, raise armies,
+          cross the seas and grind the world beneath your boot — or watch your
+          empire burn.
+        </p>
+        <div class="title-actions">
+          <button class="btn primary big" id="btn-new">NEW CAMPAIGN</button>
+          <button class="btn ghost big" id="btn-continue">CONTINUE</button>
+          <div class="title-links">
+            <button class="link" id="btn-howto">How to play</button>
+            <span>·</span>
+            <button class="link" id="btn-settings">Settings</button>
+            <span>·</span>
+            <button class="link" id="btn-quit">Quit</button>
+          </div>
+        </div>
+        <div class="title-footer">
+          <span>Seed <b id="title-seed">—</b></span>
+          <span class="muted">Turn-based pacing · Real-time pressure · 26 rival powers</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="screen-nations" class="screen hidden">
+      <div class="nation-select-side">
+        <div class="ns-head">
+          <div class="kicker">STEP 2 OF 2</div>
+          <h2>Choose your nation</h2>
+          <p class="muted">Each power begins with a capital and a handful of provinces. Tribes hold the rest of the world.</p>
+        </div>
+        <div class="ns-filters">
+          <button class="chip active" data-sort="power">Power</button>
+          <button class="chip" data-sort="provinces">Size</button>
+          <button class="chip" data-sort="name">Name</button>
+          <button class="chip" data-sort="random">Random</button>
+        </div>
+        <div class="ns-list" id="nation-list"></div>
+        <div class="ns-difficulty">
+          <span>DIFFICULTY</span>
+          <div class="seg" id="difficulty-control">
+            <button data-difficulty="easy">RECRUIT</button>
+            <button data-difficulty="normal" class="active">COMMANDER</button>
+            <button data-difficulty="hard">WARLORD</button>
+          </div>
+        </div>
+        <div class="ns-footer">
+          <button class="btn ghost" id="btn-back-title">BACK</button>
+          <button class="btn primary" id="btn-start" disabled>BEGIN CAMPAIGN</button>
+        </div>
+      </div>
+      <div class="nation-select-preview">
+        <div class="ns-selected" id="nation-detail"></div>
+      </div>
+    </section>
+
+    <!-- ============================== MODALS ============================== -->
+    <div id="modal-root" class="hidden">
+      <div id="modal-backdrop"></div>
+      <div id="modal"></div>
+    </div>
+
+    <div id="loading" class="hidden">
+      <div class="loader-globe"></div>
+      <div class="loading-text">DRAWING THE WORLD<span class="dots">...</span></div>
+    </div>
+
+    <div id="tooltip" class="hidden"></div>
+  </div>
+
+  <script type="module" src="src/game/main.js"></script>
+</body>
+</html>

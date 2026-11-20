@@ -1,0 +1,106 @@
+{
+  "name": "conquer-rule-the-globe",
+  "productName": "Conquer: Rule the Globe",
+  "version": "1.0.0",
+  "description": "A desktop grand-strategy game of world conquest: build your nation, raise armies, invade coasts, launch nukes and take 80% of the globe.",
+  "author": {
+    "name": "Conquer Studio"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "node scripts/dev-server.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:ui": "node tools/ui-test.mjs",
+    "verify": "npm test && node tools/ui-test.mjs",
+    "icons": "node tools/make-icons.mjs",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^0.1.100",
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0",
+    "jsdom": "^31.0.1"
+  },
+  "build": {
+    "appId": "com.conquerstudio.ruletheglobe",
+    "productName": "Conquer Rule the Globe",
+    "copyright": "Copyright © 2026 Conquer Studio",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "index.html",
+      "src/**/*",
+      "electron/**/*",
+      "assets/**/*",
+      "!**/*.map"
+    ],
+    "compression": "maximum",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "publisherName": "Conquer Studio",
+      "signAndEditExecutable": true,
+      "signtoolOptions": {
+        "publisherName": "Conquer Studio"
+      }
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Conquer"
+    },
+    "mac": {
+      "category": "public.app-category.strategy-games",
+      "icon": "build/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Game",
+      "icon": "build/icons",
+      "maintainer": "Conquer Studio <support@conquer.example>"
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
