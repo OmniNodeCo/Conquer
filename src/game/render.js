@@ -4,9 +4,17 @@
 
 import { TERRAIN } from './worldgen.js';
 import { clamp } from './geom.js';
-import { mix, darken, lighten, withAlpha } from './color.js';
+import { mix, darken, lighten, withAlpha, readable } from './color.js';
 
 const TAU = Math.PI * 2;
+
+// The political map is rasterised into a world-anchored buffer where one block
+// covers PIXEL world units, then scaled up with smoothing disabled. Territory,
+// coastlines, borders and takeovers therefore read as pixel art at every zoom.
+const PIXEL = 4;
+
+// How long the blocky takeover sweep takes to paint a captured province.
+const TAKEOVER_TIME = 0.9;
 
 const defaultSurface = (w, h) => {
   if (typeof document !== 'undefined') {
@@ -38,6 +46,9 @@ export class MapView {
     this.reliefCanvas = null;
     this.minimapBase = null;
     this.borderDirty = true;
+    this.pixelScale = PIXEL;
+    this.politicalCanvas = null;
+    this.politicalKey = null;
     this.lastOwnerKey = '';
     this.time = 0;
     this.hovered = null;
@@ -146,6 +157,8 @@ export class MapView {
       }
       let t = clamp(d / 34, 0, 1);
       t = Math.pow(t, 0.62);
+      // Hard depth bands: the sea reads as stepped pixel strata, not a gradient.
+      t = Math.round(t * 5) / 5;
       let r = shallow.r + (deep.r - shallow.r) * t;
       let g = shallow.g + (deep.g - shallow.g) * t;
       let b = shallow.b + (deep.b - shallow.b) * t;
@@ -233,8 +246,8 @@ export class MapView {
         const yp = y < gh - 1 ? i + gw : i;
         const dx = world.elevation[xp] - world.elevation[xm];
         const dy = world.elevation[yp] - world.elevation[ym];
-        const shade = clamp(0.5 - dx * 7 - dy * 4, 0, 1);
-        const v = Math.round(150 + shade * 165);
+        const shade = Math.round(clamp(0.5 - dx * 7 - dy * 4, 0, 1) * 3) / 3;
+        const v = Math.round(142 + shade * 178);
         rd[o] = v;
         rd[o + 1] = v;
         rd[o + 2] = v;
@@ -277,21 +290,8 @@ export class MapView {
 
     this.updateBorderSegments(state);
 
-    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.fillStyle = '#081725';
-    ctx.fillRect(0, 0, this.width, this.height);
-
     const cam = this.camera;
     const zoom = cam.zoom;
-    ctx.save();
-    ctx.translate(this.width / 2, this.height / 2);
-    ctx.scale(zoom, zoom);
-    ctx.translate(-cam.x, -cam.y);
-
-    // Base map.
-    ctx.drawImage(this.baseCanvas, 0, 0, world.width, world.height);
-
-    // Political fills.
     const view = {
       minX: cam.x - this.width / (2 * zoom),
       maxX: cam.x + this.width / (2 * zoom),
@@ -302,110 +302,184 @@ export class MapView {
     this.selected = selectedId;
     this.hovered = hoveredId;
 
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.fillStyle = '#081725';
+    ctx.fillRect(0, 0, this.width, this.height);
+
+    ctx.save();
+    ctx.translate(this.width / 2, this.height / 2);
+    ctx.scale(zoom, zoom);
+    ctx.translate(-cam.x, -cam.y);
+
+    // ---- pixel layer: the whole political map, blocky by construction
+    const layer = this.politicalLayer(state);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(layer, 0, 0, world.width, world.height);
+    ctx.imageSmoothingEnabled = true;
+
+    // ---- crisp interaction layer on top of the blocks
+    this.drawSelection(selectedId, hoveredId, zoom);
+    this.drawAttackPreview(state, zoom);
+    this.drawExpeditions(state, zoom);
+    ctx.restore();
+
+    // ---------------------------------------------------- screen-space layer
+    this.drawOverlay(state, zoom, view, { showLabels, showTroops, playerId });
+    this.drawEffects(state, zoom);
+  }
+
+  // -------------------------------------------------------------- pixel layer
+  // The political map lives in its own low-resolution, world-anchored buffer:
+  // one block = PIXEL world units. It is scaled up with smoothing disabled, so
+  // blocks behave like pixel art — chunky at every zoom level — and it is only
+  // rebuilt when ownership changes or a takeover sweep is playing.
+  provinceFill(state, prov) {
+    const nation = prov.nationId === null ? null : state.nations[prov.nationId];
+    const tribe =
+      prov.tribeId !== null && prov.tribeId !== undefined ? this.world.tribes[prov.tribeId] : null;
+    const baseColor = nation ? nation.color : tribe ? tribe.color : '#4a5560';
+    const terrain = TERRAIN[prov.terrain] || TERRAIN.plains;
+    let fill = mix(baseColor, terrain.color, nation ? 0.16 : 0.3);
+    if (!nation) fill = mix(fill, '#33404b', 0.12);
+    return readable(fill, 0.3);
+  }
+
+  /** 0..1 progress of the blocky takeover sweep, or 1 when nothing is happening. */
+  takeoverProgress(state, prov) {
+    if (prov.captureTime === undefined || prov.captureTime === null) return 1;
+    const age = state.time - prov.captureTime;
+    if (!(age >= 0) || age > TAKEOVER_TIME) return 1;
+    return age / TAKEOVER_TIME;
+  }
+
+  politicalLayer(state) {
+    const world = this.world;
+    const P = this.pixelScale;
+    const w = Math.ceil(world.width / P);
+    const h = Math.ceil(world.height / P);
+
+    let canvas = this.politicalCanvas;
+    if (!canvas || canvas.width !== w || canvas.height !== h) {
+      canvas = this.surface(w, h);
+      this.politicalCanvas = canvas;
+      this.politicalKey = null;
+    }
+
+    const ownerKey = this.ownerKeyOf(state);
+    const sweeping = state.provinces.some((p) => this.takeoverProgress(state, p) < 1);
+    if (ownerKey === this.politicalKey && !sweeping) return canvas;
+    this.politicalKey = ownerKey;
+
+    const pctx = canvas.getContext('2d');
+    pctx.setTransform(1, 0, 0, 1, 0, 0);
+    pctx.fillStyle = '#081725';
+    pctx.fillRect(0, 0, w, h);
+
+    pctx.save();
+    pctx.scale(1 / P, 1 / P);
+
+    // Terrain base, sampled down to blocks.
+    pctx.imageSmoothingEnabled = true;
+    pctx.drawImage(this.baseCanvas, 0, 0, world.width, world.height);
+    pctx.imageSmoothingEnabled = false;
+
+    // Political fills, with a blocky wipe for provinces taken moments ago.
     for (const prov of world.provinces) {
       const box = prov.bbox;
-      if (box.maxX < view.minX || box.minX > view.maxX || box.maxY < view.minY || box.minY > view.maxY) {
+      const fill = this.provinceFill(state, prov);
+      const progress = this.takeoverProgress(state, prov);
+
+      if (progress >= 1) {
+        pctx.fillStyle = fill;
+        this.fillProvinceShape(pctx, prov);
         continue;
       }
-      const nation = prov.nationId === null ? null : state.nations[prov.nationId];
-      const tribe = prov.tribeId !== null && prov.tribeId !== undefined ? world.tribes[prov.tribeId] : null;
-      const baseColor = nation ? nation.color : tribe ? tribe.color : '#4a5560';
-      const terrain = TERRAIN[prov.terrain] || TERRAIN.plains;
-      let fill = mix(baseColor, terrain.color, nation ? 0.16 : 0.3);
-      if (!nation) fill = mix(fill, '#33404b', 0.12);
-      if (prov.id === selectedId) fill = lighten(fill, 0.2);
-      else if (prov.id === hoveredId) fill = lighten(fill, 0.1);
 
-      ctx.beginPath();
-      for (const ring of prov.parts) {
-        ctx.moveTo(ring[0][0], ring[0][1]);
-        for (let i = 1; i < ring.length; i += 1) ctx.lineTo(ring[i][0], ring[i][1]);
-        ctx.closePath();
-      }
-      ctx.fillStyle = fill;
-      ctx.fill();
+      // The old flag stays legible under the blocky sweep of the new one.
+      const prevNation = prov.prevOwnerId == null ? null : state.nations[prov.prevOwnerId];
+      const prevTribe =
+        prov.tribeId !== null && prov.tribeId !== undefined ? world.tribes[prov.tribeId] : null;
+      const terrainColor = (TERRAIN[prov.terrain] || TERRAIN.plains).color;
+      pctx.fillStyle = prevNation
+        ? mix(prevNation.color, terrainColor, 0.16)
+        : prevTribe
+        ? mix(prevTribe.color, terrainColor, 0.3)
+        : '#4a5560';
+      this.fillProvinceShape(pctx, prov);
+
+      const sweep = clamp(box.minX + (box.maxX - box.minX) * progress, box.minX - 2, box.maxX + 2);
+      pctx.save();
+      pctx.beginPath();
+      pctx.rect(box.minX - 2, box.minY - 2, sweep - box.minX + 2, box.maxY - box.minY + 4);
+      pctx.clip();
+      pctx.fillStyle = fill;
+      this.fillProvinceShape(pctx, prov);
+      // Bright leading edge of the advance.
+      pctx.globalAlpha = 0.8;
+      pctx.fillStyle = '#fff4d0';
+      pctx.fillRect(sweep - P, box.minY - 2, P, box.maxY - box.minY + 4);
+      pctx.restore();
     }
 
-    // Relief overlay for terrain texture.
-    ctx.save();
-    ctx.globalCompositeOperation = 'overlay';
-    ctx.globalAlpha = 0.3;
-    ctx.drawImage(this.reliefCanvas, 0, 0, world.width, world.height);
-    ctx.restore();
+    // Relief texture, overlaid on the flat political colours.
+    pctx.save();
+    pctx.globalCompositeOperation = 'overlay';
+    pctx.globalAlpha = 0.3;
+    pctx.drawImage(this.reliefCanvas, 0, 0, world.width, world.height);
+    pctx.restore();
 
-    // Vector borders: thin province lines plus a bright national outline.
-    ctx.save();
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.beginPath();
+    // Province seams and national borders: measured in blocks, not pixels.
+    pctx.lineJoin = 'round';
+    pctx.lineCap = 'round';
+    pctx.beginPath();
     for (const prov of world.provinces) {
-      if (prov.bbox.maxX < view.minX || prov.bbox.minX > view.maxX || prov.bbox.maxY < view.minY || prov.bbox.minY > view.maxY) {
-        continue;
-      }
       for (const ring of prov.parts) {
-        ctx.moveTo(ring[0][0], ring[0][1]);
-        for (let i = 1; i < ring.length; i += 1) ctx.lineTo(ring[i][0], ring[i][1]);
-        ctx.closePath();
+        pctx.moveTo(ring[0][0], ring[0][1]);
+        for (let i = 1; i < ring.length; i += 1) pctx.lineTo(ring[i][0], ring[i][1]);
+        pctx.closePath();
       }
     }
-    ctx.strokeStyle = 'rgba(8, 12, 17, 0.42)';
-    ctx.lineWidth = 1 / zoom;
-    ctx.stroke();
+    pctx.strokeStyle = 'rgba(9, 14, 19, 0.40)';
+    pctx.lineWidth = P;
+    pctx.stroke();
 
     if (this.borderSegments.length) {
-      ctx.beginPath();
-      for (const chain of this.borderSegments) {
-        const pts = chain.points;
-        if (!pts.length) continue;
-        ctx.moveTo(pts[0][0], pts[0][1]);
-        for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i][0], pts[i][1]);
-      }
-      ctx.strokeStyle = 'rgba(4, 7, 10, 0.45)';
-      ctx.lineWidth = 6 / zoom;
-      ctx.stroke();
-      ctx.strokeStyle = 'rgba(252, 245, 226, 0.92)';
-      ctx.lineWidth = 2.2 / zoom;
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // Selection outline.
-    const selected = selectedId !== null ? world.provinces[selectedId] : null;
-    if (selected) {
-      ctx.save();
-      ctx.beginPath();
-      for (const ring of selected.parts) {
-        ctx.moveTo(ring[0][0], ring[0][1]);
-        for (let i = 1; i < ring.length; i += 1) ctx.lineTo(ring[i][0], ring[i][1]);
-        ctx.closePath();
-      }
-      ctx.lineWidth = 3.5 / zoom;
-      ctx.strokeStyle = 'rgba(255, 225, 130, 0.95)';
-      ctx.shadowColor = 'rgba(255, 200, 80, 0.9)';
-      ctx.shadowBlur = 16 / zoom;
-      ctx.stroke();
-      ctx.restore();
+      const trace = () => {
+        pctx.beginPath();
+        for (const chain of this.borderSegments) {
+          const pts = chain.points;
+          if (!pts.length) continue;
+          pctx.moveTo(pts[0][0], pts[0][1]);
+          for (let i = 1; i < pts.length; i += 1) pctx.lineTo(pts[i][0], pts[i][1]);
+        }
+      };
+      trace();
+      pctx.strokeStyle = 'rgba(4, 7, 10, 0.85)';
+      pctx.lineWidth = P * 2;
+      pctx.stroke();
+      trace();
+      pctx.strokeStyle = 'rgba(252, 245, 226, 0.95)';
+      pctx.lineWidth = P;
+      pctx.stroke();
     }
 
-    const hovered = hoveredId !== null && hoveredId !== selectedId ? world.provinces[hoveredId] : null;
-    if (hovered) {
-      ctx.save();
-      ctx.beginPath();
-      for (const ring of hovered.parts) {
-        ctx.moveTo(ring[0][0], ring[0][1]);
-        for (let i = 1; i < ring.length; i += 1) ctx.lineTo(ring[i][0], ring[i][1]);
-        ctx.closePath();
-      }
-      ctx.lineWidth = 2.5 / zoom;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
-      ctx.stroke();
-      ctx.restore();
+    pctx.restore();
+    return canvas;
+  }
+
+  fillProvinceShape(ctx, prov) {
+    ctx.beginPath();
+    for (const ring of prov.parts) {
+      ctx.moveTo(ring[0][0], ring[0][1]);
+      for (let i = 1; i < ring.length; i += 1) ctx.lineTo(ring[i][0], ring[i][1]);
+      ctx.closePath();
     }
+    ctx.fill();
+  }
 
-    // Sea lanes for the selected source / target.
-    this.drawAttackPreview(state, zoom);
-
-    // Expeditions.
+  drawExpeditions(state, zoom) {
+    const ctx = this.ctx;
+    const world = this.world;
     for (const exp of state.expeditions) {
       const from = world.provinces[exp.fromId];
       const to = world.provinces[exp.toId];
@@ -438,12 +512,79 @@ export class MapView {
       ctx.fill();
       ctx.restore();
     }
+  }
 
-    ctx.restore();
+  drawSelection(selectedId, hoveredId, zoom) {
+    const ctx = this.ctx;
+    const world = this.world;
+    const selected = selectedId !== null && selectedId !== undefined ? world.provinces[selectedId] : null;
+    if (selected) {
+      ctx.save();
+      ctx.beginPath();
+      for (const ring of selected.parts) {
+        ctx.moveTo(ring[0][0], ring[0][1]);
+        for (let i = 1; i < ring.length; i += 1) ctx.lineTo(ring[i][0], ring[i][1]);
+        ctx.closePath();
+      }
+      ctx.lineWidth = 3.5 / zoom;
+      ctx.strokeStyle = 'rgba(255, 225, 130, 0.95)';
+      ctx.shadowColor = 'rgba(255, 200, 80, 0.9)';
+      ctx.shadowBlur = 16 / zoom;
+      ctx.stroke();
+      ctx.restore();
+    }
 
-    // ---------------------------------------------------- screen-space layer
-    this.drawOverlay(state, zoom, view, { showLabels, showTroops, playerId });
-    this.drawEffects(state, zoom);
+    const hovered = hoveredId !== null && hoveredId !== undefined && hoveredId !== selectedId ? world.provinces[hoveredId] : null;
+    if (hovered) {
+      ctx.save();
+      ctx.beginPath();
+      for (const ring of hovered.parts) {
+        ctx.moveTo(ring[0][0], ring[0][1]);
+        for (let i = 1; i < ring.length; i += 1) ctx.lineTo(ring[i][0], ring[i][1]);
+        ctx.closePath();
+      }
+      ctx.lineWidth = 2.5 / zoom;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  drawExpeditions(state, zoom) {
+    const ctx = this.ctx;
+    const world = this.world;
+    for (const exp of state.expeditions) {
+      const from = world.provinces[exp.fromId];
+      const to = world.provinces[exp.toId];
+      const t = clamp((state.time - exp.startTime) / Math.max(0.01, exp.arriveTime - exp.startTime), 0, 1);
+      const sx = from.centroid[0];
+      const sy = from.centroid[1];
+      const tx = to.centroid[0];
+      const ty = to.centroid[1];
+      const mx = (sx + tx) / 2;
+      const my = (sy + ty) / 2 - Math.hypot(tx - sx, ty - sy) * 0.28;
+      const px = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * mx + t * t * tx;
+      const py = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * my + t * t * ty;
+      const nation = state.nations[exp.nationId];
+      ctx.save();
+      ctx.setLineDash([7 / zoom, 7 / zoom]);
+      ctx.strokeStyle = withAlpha(nation.color, 0.5);
+      ctx.lineWidth = 1.6 / zoom;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.quadraticCurveTo(mx, my, tx, ty);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#eaf2f8';
+      ctx.beginPath();
+      ctx.arc(px, py, 5 / zoom, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = nation.color;
+      ctx.beginPath();
+      ctx.arc(px, py, 3 / zoom, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
   }
 
   drawAttackPreview(state, zoom) {
@@ -620,17 +761,20 @@ export class MapView {
       const p = fx.t / (fx.ttl || 2);
       const [sx, sy] = this.worldToScreen(fx.x, fx.y);
       if (fx.type === 'battle') {
-        const r = 8 + p * 34;
+        const minor = fx.minor === true;
+        const r = (minor ? 5 + p * 16 : 8 + p * 34);
         ctx.save();
-        ctx.globalAlpha = 1 - p;
+        ctx.globalAlpha = (1 - p) * (minor ? 0.45 : 1);
         ctx.strokeStyle = fx.win ? '#ffe066' : '#ff6b6b';
-        ctx.lineWidth = 3 * (1 - p) + 0.6;
+        ctx.lineWidth = (minor ? 1.2 : 3 * (1 - p) + 0.6);
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, TAU);
         ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(sx, sy, r * 0.55, 0, TAU);
-        ctx.stroke();
+        if (!minor) {
+          ctx.beginPath();
+          ctx.arc(sx, sy, r * 0.55, 0, TAU);
+          ctx.stroke();
+        }
         ctx.restore();
       } else if (fx.type === 'nuke') {
         ctx.save();

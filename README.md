@@ -13,14 +13,21 @@ generated world (26 nations, ~165 provinces, deterministic per seed).
 
 - **Procedural earth-like world** — value-noise terrain, marching-squares coastlines,
   rivers, mountain ranges, deserts and tundra. Every campaign has a new map.
+- **Pixel-art map** — the political layer is rasterised into a world-anchored block
+  grid (one block = 4 world units) and scaled up with smoothing disabled, so
+  coastlines, borders and the banded sea stay chunky at every zoom level instead of
+  looking like smooth vector drawings. The layer is cached by ownership and only
+  rebuilt when the map changes or a takeover is playing.
+- **Pixelated takeovers** — capturing a province paints the new flag across it in a
+  blocky sweep over ~0.9s, old colours still visible under the advancing edge.
 - **26 playable nations** across 3 difficulties, each with a capital, flag, government
   type and AI personality (aggressive / turtle / opportunist / diplomat).
 - **Province economy** — tax income, manpower, supply and upkeep, city / port /
   factory / silo construction, recruit & reinforce.
 - **Real combat costs** — *every* assault kills soldiers. Even a walkover against a
   token garrison costs ~14% of the men you send; a failed assault loses almost the
-  whole force. Casualties are deducted on the click, shown as a battle report card
-  on the map, floating `-412` numbers over the province and a line in the feed.
+  whole force. Casualties are deducted on the click and reported by a single battle
+  card (plus one floating `-412` and a feed line) — no toast on top of it.
 - **Naval invasions** — coastal provinces with a port can sail troops across sea lanes,
   with travel time and fleet cost.
 - **Diplomacy** — declare war, sue for peace, form and break alliances, gift gold;
@@ -29,6 +36,9 @@ generated world (26 nations, ~165 provinces, deterministic per seed).
   your own borders, and erase a garrison.
 - **One steady pace** — the clock has a single speed. `Space` pauses and resumes;
   there is no 1× / 2× / 4× multiplier to micromanage.
+- **Quiet HUD** — one notification on screen at a time, repeats swallowed, and world
+  news only interrupts when your nation is in it. AI drafts no longer spray `+15,000`
+  floaters across the map, and far-away AI battles animate as small, dim rings.
 - **Persistence** — autosave plus manual save/load; the desktop build writes a real
   `campaign.json` in the OS user-data folder through Electron IPC.
 
@@ -71,7 +81,8 @@ npm run test:ui      # boots the real index.html in jsdom, plays a full campaign
 
 `npm run test:ui` drives the actual UI — starts a campaign, recruits, builds, attacks,
 launches a nuke, saves and reloads — and fails on any console error. It also writes
-`tmp-shots/09-jsdom-map.png`, a render of the map from the live canvas code.
+`tmp-shots/09-jsdom-map.png` (the live pixel map) and `tmp-shots/10-takeover.png`
+(a mid-frame capture of the blocky takeover sweep).
 
 > The desktop shell itself (`electron/main.cjs`) cannot be launched in this sandbox:
 > downloading the Electron binary is blocked here. Everything it depends on — the
@@ -156,7 +167,7 @@ src/styles/main.css        all styling (no framework, no network fonts)
 src/game/worldgen.js       terrain + province generation (deterministic seed)
 src/game/state.js          the simulation: economy, recruitment, combat, nukes, victory
 src/game/ai.js             AI nation behaviour and diplomacy
-src/game/render.js         canvas map renderer (coastlines, borders, labels, effects)
+src/game/render.js         pixel-art map renderer (block layer, borders, takeovers, effects)
 src/game/ui.js             HUD/inspector/modals, battle forecast + report cards
 src/game/save.js           versioned save/load
 src/game/main.js           app boot, loop, input, handlers

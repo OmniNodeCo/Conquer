@@ -359,7 +359,9 @@ export function recruit(state, nationId, prov, count) {
   nation.gold -= check.gold;
   nation.manpower -= count * TUNING.recruitManpower;
   prov.troops += count;
-  addFloatingText(state, prov.centroid[0], prov.centroid[1], `+${Math.round(count * 1000).toLocaleString()}`, '#8ef0a2');
+  if (nationId === state.playerNationId) {
+    addFloatingText(state, prov.centroid[0], prov.centroid[1], `+${Math.round(count * 1000).toLocaleString()}`, '#8ef0a2');
+  }
   return { ok: true };
 }
 
@@ -576,11 +578,13 @@ export function resolveAttackNow(state, { nationId, sourceProv, targetProv, troo
   state.stats.troopsLost += result.attackerLosses;
   if (defender) defender.stats.troopsLost += result.defenderLosses;
 
+  const playerInvolved = nationId === state.playerNationId || defenderId === state.playerNationId;
   addEffect(state, {
     type: 'battle',
     x: targetProv.centroid[0],
     y: targetProv.centroid[1],
     win: result.win,
+    minor: !playerInvolved,
     ttl: 1.9,
   });
 
@@ -648,6 +652,8 @@ export function captureProvince(state, prov, nationId, survivors = 0) {
   prov.nationId = nationId;
   prov.troops = Math.max(0, survivors);
   prov.captureTime = state.time;
+  // Remember the colours to paint over so the renderer can sweep the new flag in.
+  prov.prevOwnerId = previous;
   // Ports survive but silos are scuttled; keep it simple: silos destroyed.
   prov.buildings.silo = 0;
   if (previous !== null) {

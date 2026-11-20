@@ -564,24 +564,9 @@ class App {
         if (naval) {
           self.ui.toast(`Fleet away — ${Math.round(troops * 1000).toLocaleString()} men at sea.`, 'info', '⚓');
         } else if (res.result) {
-          const r = res.result;
-          const lost = Math.round(r.attackerLosses * 1000).toLocaleString();
-          const killed = Math.round(r.defenderLosses * 1000).toLocaleString();
-          if (r.win) {
-            self.ui.toast(
-              `${target.name} taken — you lost ${lost} soldiers, ${killed} of the enemy fell.`,
-              'win',
-              '⚔'
-            );
-            self.handlers.selectProvince(target.id);
-          } else {
-            self.ui.toast(
-              `Assault on ${target.name} repulsed — ${lost} soldiers lost, ${killed} enemy dead.`,
-              'loss',
-              '⚔'
-            );
-          }
-          self.ui.battleReport(self.state, target, r);
+          // The report card is the feedback; no extra toast on top of it.
+          self.ui.battleReport(self.state, target, res.result);
+          if (res.result.win) self.handlers.selectProvince(target.id);
         }
         self.ui.update(self.state, 0);
       },
@@ -808,6 +793,9 @@ class App {
       return true;
     };
 
+    const playerName = state.nations[state.playerNationId].name;
+    const mentionsPlayer = (entry) => entry.text.includes(playerName);
+
     for (const entry of fresh) {
       switch (entry.type) {
         case 'victory':
@@ -820,17 +808,20 @@ class App {
           break;
         case 'war':
           if (throttle('war', 1400)) this.audio.war();
-          if (entry.text.includes(state.nations[state.playerNationId].name)) {
-            this.ui.toast(entry.text, 'war', '⚔');
-          }
+          if (mentionsPlayer(entry)) this.ui.toast(entry.text, 'war', '⚔');
           break;
         case 'nuke':
-          if (throttle('nuke', 1200)) this.audio.nuke();
-          this.ui.toast(entry.text, 'war', '☢');
+          if (mentionsPlayer(entry)) {
+            if (throttle('nuke', 1200)) this.audio.nuke();
+            this.ui.toast(entry.text, 'war', '☢');
+          }
           break;
         case 'diplomacy':
-          if (throttle('diplomacy', 900)) this.audio.cash();
-          this.ui.toast(entry.text, 'info', '✉');
+          // Only the player's own treaties interrupt; the feed has the rest.
+          if (mentionsPlayer(entry)) {
+            if (throttle('diplomacy', 900)) this.audio.cash();
+            this.ui.toast(entry.text, 'info', '✉');
+          }
           break;
         case 'elimination':
           this.ui.toast(entry.text, 'info', '☠');

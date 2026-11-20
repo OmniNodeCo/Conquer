@@ -322,7 +322,17 @@ export class UI {
     }, 4200);
   }
 
+  /**
+   * Single-slot notification. A new message replaces the one on screen instead
+   * of stacking up, repeats inside a short window are swallowed, and world news
+   * never piles on top of the player's own action feedback.
+   */
   toast(text, kind = 'info', iconChar = '') {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (this._lastToast && this._lastToast.text === text && now - this._lastToast.at < 2600) return;
+    if (this._lastToast && now - this._lastToast.at < 450) return;
+    this._lastToast = { text, at: now };
+
     const node = document.createElement('div');
     node.className = `toast ${kind}`;
     node.innerHTML = `${iconChar ? `<span class="t-icon">${iconChar}</span>` : ''}<span>${text}</span>`;
@@ -332,8 +342,9 @@ export class UI {
       node.style.opacity = '0';
       node.style.transform = 'translateY(-6px)';
       setTimeout(() => node.remove(), 420);
-    }, 3800);
-    while (this.el.toasts.children.length > 4) this.el.toasts.firstChild.remove();
+    }, 3400);
+    // One message on screen at a time; the feed keeps the full history.
+    while (this.el.toasts.children.length > 1) this.el.toasts.firstChild.remove();
   }
 
   // ------------------------------------------------------------------ update

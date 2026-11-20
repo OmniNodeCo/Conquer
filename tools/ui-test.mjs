@@ -206,6 +206,11 @@ await wait(320);
 const atkHTML = document.getElementById('inspector').innerHTML;
 assert(atkHTML.includes('attack-source') || atkHTML.includes('ATTACK'), 'attack panel visible');
 assert(!!app.view.attackTarget, 'attack preview wired to renderer');
+assert(app.view.pixelScale >= 3, `map renders in pixel blocks (${app.view.pixelScale}px)`);
+assert(!!app.view.politicalCanvas, 'pixel layer allocated');
+assert(app.view.politicalCanvas.width < app.view.canvas.width, 'pixel layer is low resolution');
+assert(app.view.politicalKey !== null, 'pixel layer cached against ownership');
+assert(document.querySelectorAll('#toasts .toast').length <= 1, 'single-slot notifications');
 
 // --- one steady pace: no 1x/2x/4x multipliers ---------------------------
 assert(document.querySelectorAll('#speed-control button').length === 1, 'single pace control in HUD');
@@ -221,6 +226,9 @@ if (pauseBtn) {
   assert(app.state.paused === wasPaused, 'pause toggles back');
   assert(pauseBtn.textContent.trim() === (wasPaused ? '▶' : '❚❚'), 'pause button glyph matches state');
 }
+
+// Freeze the clock so an AI counter-attack cannot move the numbers mid-assertion.
+app.state.paused = true;
 
 const sourceSelect = document.getElementById('attack-source');
 const sourceId = sourceSelect ? Number(sourceSelect.value) : null;
@@ -239,6 +247,8 @@ if (attackBtn) {
     assert(/Soldiers lost/.test(report?.textContent || ''), 'battle report lists casualties');
     assert(player.stats.troopsLost > lossesBefore, 'attacking costs soldiers');
     assert((report?.textContent || '').includes('−'), 'casualties shown as a loss');
+    assert(document.querySelectorAll('#battle-report').length === 1, 'only one battle report card exists');
+    assert(document.querySelectorAll('#toasts .toast').length <= 1, 'toasts never stack up');
   } else {
     assert(player.stats.troopsLost >= lossesBefore, 'naval attack committed the fleet');
   }
@@ -253,6 +263,31 @@ if (attackBtn) {
   errors.push('no attack button rendered');
 }
 
+// --- blocky takeover sweep: grab a mid-animation frame -------------------
+const taken = app.state.provinces.find((p) => p.prevOwnerId !== undefined && app.state.time >= p.captureTime);
+if (taken) {
+  const keepTime = app.state.time;
+  const keepSel = app.state.selectedProvinceId;
+  app.state.time = taken.captureTime + 0.45; // ~half way through the sweep
+  app.view.draw(app.state, {
+    time: 1,
+    showLabels: true,
+    showTroops: true,
+    selectedId: taken.id,
+    hoveredId: null,
+  });
+  mkdirSync('tmp-shots', { recursive: true });
+  const sweepShot = backing.get(document.getElementById('map'));
+  if (sweepShot) writeFileSync('tmp-shots/10-takeover.png', sweepShot.toBuffer('image/png'));
+  app.state.time = keepTime;
+  app.state.selectedProvinceId = keepSel;
+  assert(typeof app.view.takeoverProgress(app.state, taken) === 'number', `takeover sweep tracked (${taken.name})`);
+} else {
+  errors.push('no captured province available for the takeover preview');
+}
+
+app.state.paused = false;
+
 // --- diplomacy ------------------------------------------------------------
 const other = app.state.nations.find((n) => n.id !== player.id && n.alive);
 if (other) {
@@ -263,6 +298,8 @@ if (other) {
 }
 
 // --- nuke flow on a cheated treasury --------------------------------------
+// Freeze the clock: the AI must not snatch the silo province mid-assertion.
+app.state.paused = true;
 player.gold = 5000;
 const ownProv = app.state.provinces.find((p) => p.nationId === player.id);
 ownProv.buildings.silo = 1;
@@ -277,6 +314,7 @@ if (nukeBtn && !nukeBtn.disabled) {
   errors.push('nuke build button unavailable');
 }
 player.nukes = 1;
+app.state.paused = false;
 app.handlers.enterNukeMode();
 assert(app.state.mode === 'nuke', 'nuke targeting mode');
 const target = app.state.provinces.find((p) => p.nationId !== player.id);

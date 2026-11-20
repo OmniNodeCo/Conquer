@@ -209,6 +209,49 @@ test('clicking attack reports the soldiers the player lost', () => {
   assert.ok(state.provinces.some((p) => p.nationId === player.id), 'player still holds land');
 });
 
+test('background AI activity does not spam the player with floaters', () => {
+  const state = freshGame();
+  const player = state.player;
+  const ai = state.nations.find((n) => n.id !== player.id && n.alive);
+  const aiProv = state.provinces.find((p) => p.nationId === ai.id);
+  ai.gold = 1000;
+  ai.manpower = 1000;
+  state.effects.length = 0;
+  const res = recruit(state, ai.id, aiProv, 3);
+  assert.equal(res.ok, true);
+  assert.equal(state.effects.filter((e) => e.type === 'text').length, 0, 'AI drafts stay off the map');
+
+  const ownProv2 = state.provinces.find((p) => p.nationId === player.id);
+  player.gold = 1000;
+  player.manpower = 1000;
+  recruit(state, player.id, ownProv2, 2);
+  assert.equal(state.effects.filter((e) => e.type === 'text').length, 1, 'player drafts still pop');
+});
+
+test('AI battles animate quietly until the player is involved', () => {
+  const state = freshGame();
+  const player = state.player;
+  const ai = state.nations.find((n) => n.id !== player.id && n.alive);
+  const attacker = state.provinces.find((p) => p.nationId === ai.id && p.troops > 0);
+  const enemy = attacker.neighbours
+    .map((id) => state.provinces[id])
+    .find((p) => p.nationId !== null && p.nationId !== ai.id);
+  if (enemy) {
+    state.effects.length = 0;
+    attacker.troops = 60;
+    resolveAttackNow(state, {
+      nationId: ai.id,
+      sourceProv: attacker,
+      targetProv: enemy,
+      troops: 40,
+      naval: false,
+    });
+    const ring = state.effects.find((e) => e.type === 'battle');
+    assert.ok(ring, 'a battle ring is queued');
+    assert.equal(ring.minor, true, 'far-away AI battles must be dialled down');
+  }
+});
+
 test('attacking captures provinces and moves the army', () => {
   const state = freshGame();
   const player = state.player;

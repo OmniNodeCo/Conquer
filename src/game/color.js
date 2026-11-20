@@ -30,6 +30,18 @@ export function darken(hex, t) {
   return mix(hex, '#05070c', t);
 }
 
+export function luminance(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+}
+
+/** Lift very dark banner colours so no nation vanishes into the sea. */
+export function readable(hex, min = 0.3) {
+  const lum = luminance(hex);
+  if (lum >= min) return hex;
+  return mix(hex, '#dfe8f0', Math.min(0.62, (min - lum) * 1.7));
+}
+
 export function withAlpha(hex, alpha) {
   const { r, g, b } = hexToRgb(hex);
   return `rgba(${r},${g},${b},${alpha})`;
