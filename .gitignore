@@ -7,3 +7,4 @@ tmp-*.png
 tmp-shots/
 tmp/
 coverage/
+.buntools/

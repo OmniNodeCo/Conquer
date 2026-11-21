@@ -148,9 +148,50 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  portable:
+    name: Portable executables
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Single-file executables with an embedded runtime: no installer, no
+      # dependencies on the target machine, built by cross-compiling Bun.
+      - name: Fetch the Bun build tool
+        run: node tools/get-bun.mjs
+
+      - name: Build portable executables
+        run: node tools/build-exe.mjs
+
+      - name: Smoke-test the Linux executable
+        run: |
+          chmod +x release/*-linux-x64
+          ./release/*-linux-x64 --no-open --port=5199 &
+          SERVER=$!
+          for i in $(seq 1 30); do
+            sleep 1
+            if curl -sf http://127.0.0.1:5199/ >/dev/null; then break; fi
+          done
+          curl -sf http://127.0.0.1:5199/ | grep -q "CONQUER" || { echo "executable did not serve the game"; kill $SERVER; exit 1; }
+          curl -sf http://127.0.0.1:5199/src/game/main.js >/dev/null
+          kill $SERVER
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conquer-portable
+          path: |
+            release/*.exe
+            release/*-linux-x64
+          if-no-files-found: error
+          retention-days: 30
+
   publish:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, portable]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

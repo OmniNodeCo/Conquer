@@ -187,6 +187,22 @@ test('the electron-builder config validates against its own schema', () => {
   assert.equal(pkg.build.win.publisherName, undefined);
 });
 
+test('the portable executable launcher is self-contained', () => {
+  const launcher = fs.readFileSync(path.join(ROOT, 'desktop/launcher.mjs'), 'utf8');
+  assert.match(launcher, /Bun\.serve/, 'the launcher hosts the game itself');
+  assert.match(launcher, /'--no-open'/, 'headless mode is needed for smoke tests');
+  assert.match(launcher, /4317/, 'a stable default port keeps save data on one origin');
+  assert.match(launcher, /font\/woff2/, 'fonts must be served with the right type');
+  assert.match(launcher, /--app=\$\{url\}/, 'opens an app-style browser window');
+
+  const builder = fs.readFileSync(path.join(ROOT, 'tools/build-exe.mjs'), 'utf8');
+  assert.match(builder, /bun-windows-x64/, 'cross-builds a Windows executable');
+  assert.match(builder, /bun-linux-x64/, 'builds a Linux executable');
+  assert.match(builder, /base64/, 'assets are embedded in the binary');
+  assert.ok(pkg.scripts['build:exe'], 'npm run build:exe must exist');
+  assert.ok(pkg.scripts['get:bun'], 'npm run get:bun must exist');
+});
+
 test('release workflow builds all three platforms and can sign them', () => {
   const file = path.join(ROOT, '.github/workflows/release.yml');
   assert.ok(fs.existsSync(file), 'release workflow missing');

@@ -135,6 +135,8 @@ npm run dist:win     # NSIS installer + zip  (build/icon.ico)
 npm run dist:mac     # DMG, x64 + arm64, hardened runtime (build/icon.icns)
 npm run dist:linux   # AppImage + deb
 npm run build:web    # runnable browser build -> release/web + release/*.tar.gz
+npm run get:bun      # fetch the Bun build tool into .buntools/ (once)
+npm run build:exe    # portable single-file executables (.exe + Linux binary)
 npm run icons        # rebuild PNG/ICO/ICNS from assets/icon-pixel-src.png
 ```
 
@@ -169,6 +171,32 @@ The updater module is loaded inside a `try`/`catch`, so a source checkout withou
 production dependencies still runs; it simply reports `browser build`. Versions
 must be bumped in **both** `package.json` and the `app-version` meta tag in
 `index.html` — a test fails if the two drift apart.
+
+## Portable executables
+
+`npm run get:bun && npm run build:exe` produces two dependency-free binaries:
+
+| File | Size | Runs on |
+| --- | --- | --- |
+| `release/Conquer-Rule-the-Globe-1.0.0-windows-x64.exe` | ~112 MB | Windows 10/11 x64, no install |
+| `release/Conquer-Rule-the-Globe-1.0.0-linux-x64` | ~106 MB | Linux x64, no install |
+
+Each one carries its own JavaScript runtime (Bun) plus the entire game — HTML,
+ES modules, fonts and artwork — embedded as a base64 payload. Launching it starts
+a private HTTP server on `127.0.0.1:4317` (a fixed port so campaign saves keep the
+same localStorage origin), then opens an app-style browser window
+(`msedge --app=` / `chrome --app=` / `xdg-open`). `--no-open` serves headlessly and
+`--port=N` overrides the port, which is what CI's smoke test uses.
+
+These are a **portable fallback**, not the Electron product: no installer, no code
+signature, and it needs a Chromium-based browser to draw the window. The signed
+Electron installers are built by `release.yml`; the portable binaries are built by
+the `portable` job there too, and attached to the same GitHub Release.
+
+Why both exist: Electron's binary downloads (and therefore `electron-builder`) are
+blocked in this sandbox, so the portables are the executables that can actually be
+produced here — verified by launching the Linux build and hashing every served
+file against the repository.
 
 ## Releasing
 
@@ -256,10 +284,11 @@ xcrun stapler validate release/*.dmg
 
 `npx electron-builder --dir` gets as far as resolving the app, validating the
 config and running `@electron/rebuild`, then fails while fetching the Electron
-binary — this sandbox's egress proxy cannot verify the download host's
-certificate, so **no installer can be produced here**. That is why the local
-build target is `npm run build:web` and the desktop installers come from the
-release workflow, which runs on GitHub-hosted runners.
+binary — this sandbox's egress allow-list does not include the release-asset host
+(`release-assets.githubusercontent.com`), so **no Electron installer can be
+produced here**. That is why the installers come from the release workflow, and
+why `npm run build:exe` exists: it cross-compiles portable single-file executables
+from assets that *are* reachable (the npm registry hosts the Bun runtime).
 
 No code-signing certificate exists in this sandbox (and no certificate authority will
 issue one for an unsigned demo project), so the artifacts you can build here are
@@ -287,6 +316,9 @@ build/                     icons (ico/icns/png set) + mac entitlements
 tests/                     node:test suites (logic + desktop packaging)
 tools/ui-test.mjs          jsdom end-to-end UI harness
 tools/pixelate.mjs         downsample + nearest upscale artwork to true pixel blocks
+tools/build-exe.mjs        embeds the game in Bun and cross-compiles portable binaries
+tools/get-bun.mjs          fetches the Bun build tool from the npm registry
+desktop/launcher.mjs       the portable build's entry point (server + app window)
 assets/fonts/              self-hosted woff2 (Pixelify Sans, VT323, Silkscreen)
 assets/icon-pixel-src.png  pixel-art icon source, snapped to a 96-block grid
 ```
