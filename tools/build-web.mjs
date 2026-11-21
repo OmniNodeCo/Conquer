@@ -1,6 +1,6 @@
 // Produces a runnable browser build of the game in release/web plus a tarball.
 // The desktop installers are built by electron-builder (see .github/workflows/
-// release.yml); this target is what you can build and check without the Electron
+// build.yml); this target is what you can build and check without the Electron
 // binary, and it doubles as a store-page demo build.
 import { cp, mkdir, rm, writeFile, readFile, copyFile, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
@@ -34,8 +34,8 @@ Run it:
 A plain static server works too — it must be served over http(s), because the
 game is an ES-module app and browsers refuse module scripts on file:// URLs.
 
-The desktop builds (signed installers) come from electron-builder:
-see .github/workflows/release.yml.
+The desktop installers are built by .github/workflows/build.yml and published
+by .github/workflows/release.yml.
 `,
   'utf8'
 );

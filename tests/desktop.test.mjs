@@ -203,34 +203,6 @@ test('the portable executable launcher is self-contained', () => {
   assert.ok(pkg.scripts['get:bun'], 'npm run get:bun must exist');
 });
 
-test('release workflow builds all three platforms and can sign them', () => {
-  const file = path.join(ROOT, '.github/workflows/release.yml');
-  assert.ok(fs.existsSync(file), 'release workflow missing');
-  const yml = fs.readFileSync(file, 'utf8');
-  for (const needed of [
-    'workflow_dispatch',
-    "tags:",
-    'windows-latest',
-    'macos-14',
-    'ubuntu-latest',
-    '--win',
-    '--mac',
-    '--linux',
-    'WIN_CSC_LINK',
-    'WIN_CSC_KEY_PASSWORD',
-    'MAC_CSC_LINK',
-    'APPLE_ID',
-    'APPLE_APP_SPECIFIC_PASSWORD',
-    'APPLE_TEAM_ID',
-    'actions/upload-artifact',
-    'gh release create',
-    'npm test',
-  ]) {
-    assert.ok(yml.includes(needed), `release workflow is missing ${needed}`);
-  }
-  assert.ok(!/\bsecrets\.[A-Z_]+\s*!=\s*''/.test(yml), 'secrets are not allowed in step if-expressions');
-});
-
 test('packaged file list covers source, assets and the electron shell', () => {
   const files = pkg.build.files;
   for (const required of ['index.html', 'src/**/*', 'electron/**/*', 'assets/**/*']) {

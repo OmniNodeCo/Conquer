@@ -112,7 +112,7 @@ npm run dev          # http://localhost:5173
 ## Verification
 
 ```bash
-npm test             # 27 headless assertions: worldgen, economy, combat, saves, packaging
+npm test             # headless tests: worldgen, economy, combat, saves, packaging and CI
 npm run test:ui      # boots the real index.html in jsdom, plays a full campaign turn
 npm run build:web    # browser build in release/web (serve it with scripts/serve.mjs)
 ```
@@ -132,7 +132,7 @@ launches a nuke, saves and reloads — and fails on any console error. It also w
 ```bash
 npm run pack         # unpacked app in release/ (fast smoke test)
 npm run dist:win     # NSIS installer + zip  (build/icon.ico)
-npm run dist:mac     # DMG, x64 + arm64, hardened runtime (build/icon.icns)
+npm run dist:mac     # DMG + updater zip, x64 + arm64 (build/icon.icns)
 npm run dist:linux   # AppImage + deb
 npm run build:web    # runnable browser build -> release/web + release/*.tar.gz
 npm run get:bun      # fetch the Bun build tool into .buntools/ (once)
@@ -189,51 +189,57 @@ same localStorage origin), then opens an app-style browser window
 `--port=N` overrides the port, which is what CI's smoke test uses.
 
 These are a **portable fallback**, not the Electron product: no installer, no code
-signature, and it needs a Chromium-based browser to draw the window. The signed
-Electron installers are built by `release.yml`; the portable binaries are built by
-the `portable` job there too, and attached to the same GitHub Release.
+signature, and it needs a Chromium-based browser to draw the window. The
+`desktop` and `portable` jobs in `build.yml` build the Electron installers and
+portable binaries, respectively. `release.yml` attaches both to the same release.
 
 Why both exist: Electron's binary downloads (and therefore `electron-builder`) are
 blocked in this sandbox, so the portables are the executables that can actually be
 produced here — verified by launching the Linux build and hashing every served
 file against the repository.
 
-## Releasing
+## CI and releasing
 
-`.github/workflows/release.yml` is the whole pipeline. It runs on every `v*` tag
-push (and on demand via *Run workflow*):
+[Build](.github/workflows/build.yml) has read-only permissions. On branch pushes,
+pull requests and manual runs it runs `npm ci`, `npm test` and `npm run test:ui`,
+then builds the web archives and portable executables. On pushes to `main` and
+manual runs it also builds Windows, macOS and Linux installers. Release artifacts
+are retained for 30 days; UI screenshots are separate, diagnostic artifacts.
 
-1. **Verify** — `npm ci`, `npm test`, `npm run test:ui` on Ubuntu; the rendered
-   map frames are uploaded as an artifact.
-2. **Build** — a three-way matrix: `windows-latest` (`--win`), `macos-14`
-   (`--mac`, arm64 + x64 DMGs) and `ubuntu-latest` (`--linux`), each running
-   `electron-builder --publish never` and uploading installers as artifacts.
-   Signing secrets are passed per platform; **when they are absent the build is
-   simply unsigned**, so forks and pull requests still produce artifacts.
-3. **Publish** — on a tag, all artifacts (including the `latest*.yml` update
-   manifests electron-updater reads) are downloaded, checksummed into
-   `SHA256SUMS.txt` and attached to the GitHub Release with `gh release create`
-   (re-running the job uploads with `--clobber` instead of failing).
+[Release](.github/workflows/release.yml) publishes **those artifacts**, without
+checking out or rebuilding the game. A successful **push build of `main`**
+automatically releases `v<package.json version>` from that run. To ship a new
+version, bump `package.json`, `package-lock.json` and the `app-version` meta tag
+in `index.html` before merging. **No tag push is required**; pushing just a tag
+doesn't start a Build or Release.
 
-Cut a release with:
+To release by hand, use **Actions → Release → Run workflow**:
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+| Optional input | Default / effect |
+| --- | --- |
+| `tag` | Exact tag to release (e.g. `v1.0.0` or `preview`). Blank uses `v` + the version **at the build's commit**. |
+| `run_id` | Blank selects the latest successful `build.yml` run on `main` (push or manual). Supply a run ID to pin another such build. |
+| `draft` / `prerelease` | Both default to false. |
 
-Repository secrets used by the workflow:
+A **missing tag** is created at the selected build's SHA. An **existing tag** is
+reused without moving it, even if it points to an older commit. If the release
+already exists, same-named assets are replaced with `--clobber`. The notes link
+to the source build, and `SHA256SUMS.txt` covers the installers, portables, web
+archives and updater files. Failed/PR builds and incomplete artifact sets are not
+published. Both workflows must land on the default branch for the automatic
+handoff and *Run workflow* UI to be available.
+
+Signing secrets used by **Build** (Release needs only the automatic `GITHUB_TOKEN`):
 
 | Secret | Platform | Purpose |
 | --- | --- | --- |
-| `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` | Windows | Authenticode `.pfx` (path, base64 or https URL) |
+| `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` | Windows | Authenticode `.pfx` (base64 or HTTPS URL) |
 | `MAC_CSC_LINK` / `MAC_CSC_KEY_PASSWORD` | macOS | Developer ID `.p12` |
 | `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` | macOS | Notarization |
-| `GITHUB_TOKEN` (automatic) | all | Uploading release assets |
 
-The workflow also verifies the produced binaries when a certificate is present
-(`Get-AuthenticodeSignature` on Windows, `codesign --verify` + `spctl --assess`
-on macOS) and skips that step cleanly when it is not.
+With a certificate, Build checks `Get-AuthenticodeSignature` or `codesign --verify`
+(and `spctl --assess` for notarized apps). Without signing secrets it still
+produces installers, but they are not publisher-signed.
 
 ## Code signing
 
@@ -249,7 +255,7 @@ export CSC_KEY_PASSWORD='pfx-password'
 npm run dist:win
 ```
 
-`package.json` sets `win.publisherName` and `win.signtoolOptions.publisherName` to
+`package.json` sets `win.signtoolOptions.publisherName` to
 `Conquer Studio`, and `signAndEditExecutable: true` so the exe is signed and
 version-stamped. To verify a produced artifact:
 
@@ -286,7 +292,7 @@ xcrun stapler validate release/*.dmg
 config and running `@electron/rebuild`, then fails while fetching the Electron
 binary — this sandbox's egress allow-list does not include the release-asset host
 (`release-assets.githubusercontent.com`), so **no Electron installer can be
-produced here**. That is why the installers come from the release workflow, and
+produced here**. That is why the installers come from the Build workflow, and
 why `npm run build:exe` exists: it cross-compiles portable single-file executables
 from assets that *are* reachable (the npm registry hosts the Bun runtime).
 

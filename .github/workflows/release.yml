@@ -1,222 +1,128 @@
 name: Release
 
-# Builds the desktop installers for Windows, macOS and Linux and attaches them to
-# a GitHub Release when a version tag is pushed:
-#
-#   git tag v1.0.0 && git push origin v1.0.0
-#
-# Running the workflow manually only produces build artifacts (no release).
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_run:
+    workflows: [Build]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to reuse or create (empty = v<version of the build>)'
+        type: string
+      run_id:
+        description: 'Build run ID (empty = latest successful push or manual Build on main)'
+        type: string
+      draft:
+        description: 'Draft release'
+        type: boolean
+        default: false
+      prerelease:
+        description: 'Pre-release'
+        type: boolean
+        default: false
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: write
 
-env:
-  NODE_VERSION: '22'
-  # Never let electron-builder hunt for a local identity: certificates come from
-  # secrets only. With no secrets the artifacts are built unsigned instead of
-  # failing, which is what you want on a fork.
-  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-
 jobs:
-  verify:
-    name: Verify
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Logic, save and packaging tests
-        run: npm test
-
-      - name: Headless UI smoke test
-        run: npm run test:ui
-
-      - name: Upload rendered map frames
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ui-screenshots
-          path: tmp-shots/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  build:
-    name: Build ${{ matrix.name }}
-    needs: verify
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Windows (x64)
-            os: windows-latest
-            artifact: conquer-windows-x64
-            target: --win
-          - name: macOS (arm64 + x64)
-            os: macos-14
-            artifact: conquer-macos
-            target: --mac
-          - name: Linux (x64)
-            os: ubuntu-latest
-            artifact: conquer-linux-x64
-            target: --linux
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build installers
-        env:
-          # Windows Authenticode certificate (.pfx path, base64 blob or https URL)
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-          # macOS Developer ID certificate + notarization credentials
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder ${{ matrix.target }} --publish never
-
-      - name: Verify the Windows signature
-        if: matrix.target == '--win'
-        shell: pwsh
-        env:
-          WIN_CERT: ${{ secrets.WIN_CSC_LINK }}
-        run: |
-          if (-not $env:WIN_CERT) {
-            Write-Host 'No WIN_CSC_LINK secret: the installer is unsigned (expected on forks).'
-            exit 0
-          }
-          Get-ChildItem release -Filter *.exe -Recurse | ForEach-Object {
-            $sig = Get-AuthenticodeSignature $_.FullName
-            Write-Host "$($_.Name): $($sig.Status)"
-            if ($sig.Status -ne 'Valid') { throw "Invalid signature on $($_.Name)" }
-          }
-
-      - name: Verify the macOS signature
-        if: matrix.target == '--mac'
-        env:
-          MAC_CERT: ${{ secrets.MAC_CSC_LINK }}
-        run: |
-          if [ -z "$MAC_CERT" ]; then
-            echo "No MAC_CSC_LINK secret: the app is unsigned (expected on forks)."
-            exit 0
-          fi
-          APP=$(find release -maxdepth 3 -name "*.app" | head -n 1)
-          codesign --verify --deep --strict --verbose=2 "$APP"
-          spctl --assess --type execute -vv "$APP"
-
-      - name: Collect artifacts
-        shell: bash
-        run: |
-          mkdir -p out
-          shopt -s nullglob
-          for f in release/*.exe release/*.zip release/*.dmg release/*.AppImage release/*.deb release/*.blockmap release/*.yml release/*.json; do
-            cp "$f" out/
-          done
-          ls -lh out
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: out/
-          if-no-files-found: error
-          retention-days: 30
-
-  portable:
-    name: Portable executables
-    needs: verify
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      # Single-file executables with an embedded runtime: no installer, no
-      # dependencies on the target machine, built by cross-compiling Bun.
-      - name: Fetch the Bun build tool
-        run: node tools/get-bun.mjs
-
-      - name: Build portable executables
-        run: node tools/build-exe.mjs
-
-      - name: Smoke-test the Linux executable
-        run: |
-          chmod +x release/*-linux-x64
-          ./release/*-linux-x64 --no-open --port=5199 &
-          SERVER=$!
-          for i in $(seq 1 30); do
-            sleep 1
-            if curl -sf http://127.0.0.1:5199/ >/dev/null; then break; fi
-          done
-          curl -sf http://127.0.0.1:5199/ | grep -q "CONQUER" || { echo "executable did not serve the game"; kill $SERVER; exit 1; }
-          curl -sf http://127.0.0.1:5199/src/game/main.js >/dev/null
-          kill $SERVER
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: conquer-portable
-          path: |
-            release/*.exe
-            release/*-linux-x64
-          if-no-files-found: error
-          retention-days: 30
-
   publish:
-    name: Publish GitHub Release
-    needs: [build, portable]
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Checksums
-        run: |
-          cd dist
-          ls -lh
-          sha256sum * > SHA256SUMS.txt
-
-      - name: Create or update the release
+      - name: Select a successful Build and its tag
+        id: build
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          workflow="repos/$GH_REPO/actions/workflows/build.yml"
+          if [[ -z "$RUN_ID" ]]; then
+            # The API returns newest first. Check both kinds of full builds, never PRs.
+            for event in push workflow_dispatch; do
+              id=$(gh api "$workflow/runs?branch=main&event=$event&status=success&per_page=1" --jq '.workflow_runs[].id')
+              if (( ${id:-0} > ${RUN_ID:-0} )); then RUN_ID=$id; fi
+            done
+          fi
+          if [[ ! "$RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo '::error::Expected the numeric ID of a successful Build on main. Run Build first.'
+            exit 1
+          fi
+
+          # A supplied ID must meet the same trust and completeness criteria as the default.
+          workflow_id=$(gh api "$workflow" --jq '.id')
+          run=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID")
+          if ! sha=$(jq -er --arg repo "$GH_REPO" --argjson workflow "$workflow_id" '
+            select(.workflow_id == $workflow and .conclusion == "success" and
+                   .head_repository.full_name == $repo and .head_branch == "main" and
+                   (.event == "push" or .event == "workflow_dispatch")) | .head_sha' <<< "$run"); then
+            echo "::error::Run $RUN_ID is not a successful Build of main in $GH_REPO."
+            exit 1
+          fi
+
+          tag=$INPUT_TAG
+          if [[ -z "$tag" ]]; then
+            version=$(gh api "repos/$GH_REPO/contents/package.json?ref=$sha" --jq '.content | @base64d | fromjson | .version')
+            tag="v${version:?missing package version}"
+          fi
+          if [[ "$tag" == -* ]] || ! git check-ref-format "refs/tags/$tag"; then
+            echo '::error::Invalid release tag.'
+            exit 1
+          fi
+          printf 'run_id=%s\nsha=%s\ntag=%s\n' "$RUN_ID" "$sha" "$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts from that Build (not this run)
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.build.outputs.run_id }}
+          pattern: conquer-*
+          path: artifacts
+
+      - name: Stage release assets and checksums
+        run: |
+          set -euo pipefail
+          mkdir dist
+          # Refuse to publish a partial release if artifacts expired or were removed.
+          for group in conquer-web conquer-portable conquer-windows-x64 conquer-macos conquer-linux-x64; do
+            for asset in "artifacts/$group/"*; do
+              if [[ ! -s "$asset" || ! -f "$asset" || -e "dist/${asset##*/}" ]]; then
+                echo "::error::Missing, empty or duplicate build asset: $asset"
+                exit 1
+              fi
+              mv -- "$asset" dist/
+            done
+          done
+          (cd dist && sha256sum -- * > SHA256SUMS.txt)
+
+      - name: Create or refresh the release
+        env:
+          TAG: ${{ steps.build.outputs.tag }}
+          SHA: ${{ steps.build.outputs.sha }}
+          RUN_ID: ${{ steps.build.outputs.run_id }}
+          DRAFT: ${{ inputs.draft || false }}
+          PRERELEASE: ${{ inputs.prerelease || false }}
+        run: |
+          set -euo pipefail
+          notes="Built from commit $SHA by [Build run $RUN_ID]($GITHUB_SERVER_URL/$GH_REPO/actions/runs/$RUN_ID)."
+          options=(--title "Conquer: Rule the Globe $TAG" --notes "$notes" --draft="$DRAFT" --prerelease="$PRERELEASE")
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" "${options[@]}"
           else
-            gh release create "$TAG" dist/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "Conquer: Rule the Globe $TAG" \
-              --generate-notes
+            # GitHub preserves an existing tag; --target sets the commit ONLY for a new tag.
+            gh release create "$TAG" dist/* --target "$SHA" "${options[@]}"
           fi
