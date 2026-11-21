@@ -11,7 +11,7 @@ const errors = [];
 const logs = [];
 const html = readFileSync('index.html', 'utf8');
 const dom = new JSDOM(html, {
-  url: 'http://127.0.0.1:5173/',
+  url: 'https://conquer.test/', // storage origin only; jsdom does not fetch the page
   pretendToBeVisual: true,
   runScripts: 'outside-only',
 });
@@ -418,7 +418,7 @@ assert(!!versionMeta, 'app version meta present');
 const footerVersion = document.getElementById('footer-version');
 assert(footerVersion.textContent.trim() === `v${versionMeta.content}`, `footer shows version (${footerVersion.textContent})`);
 const footerUpdate = document.getElementById('footer-update');
-assert(footerUpdate.textContent.includes('browser build'), `footer reports update state (${footerUpdate.textContent})`);
+assert(footerUpdate.textContent.includes('updates unavailable'), `footer reports update state (${footerUpdate.textContent})`);
 
 // --- run a longer war to shake out AI ------------------------------------
 app.state.paused = false;

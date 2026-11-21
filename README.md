@@ -9,6 +9,23 @@ generated world (26 nations, ~165 provinces, deterministic per seed).
 
 ---
 
+## Play the desktop app
+
+Download your platform's file from [Releases](https://github.com/OmniNodeCo/Conquer/releases).
+For an unreleased build, open its **Actions → Build → Artifacts** entry and
+extract the platform archive first. Use the desktop download, not *Source code*.
+
+| Platform | How to launch |
+| --- | --- |
+| Windows x64 | Double-click **`Conquer-Portable-<version>-x64.exe`** to play without installing. Or double-click **`Conquer-Setup-<version>-x64.exe`** to install and launch from the **Conquer** shortcut. |
+| macOS | Open the `.dmg` for Apple Silicon (`arm64`) or Intel (`x64`), drag **Conquer Rule the Globe** to Applications and open it there. |
+| Linux x64 | Open the `.deb` with your software installer, then launch Conquer from the applications menu. Or mark the `.AppImage` executable in your file manager’s **Properties → Permissions** and double-click it. |
+
+Each download includes Electron and the game files. Opening it starts a game
+window, not a terminal or your web browser. There is no local web server, port
+or URL to open, and no need to install Node.js. If you have the old browser-based
+portable, download the new **Conquer-Portable** instead.
+
 ## Highlights
 
 - **Procedural earth-like world** — value-noise terrain, marching-squares coastlines,
@@ -96,115 +113,52 @@ provinces. `Esc` cancels placement.
 | `5` | Factory — cheaper recruits, more income |
 | `6` | Missile Silo — unlocks warheads |
 
-## Running it
+## Developer setup
+
+Players use the desktop downloads above. For development from source:
 
 ```bash
-npm install          # Electron, electron-builder, jsdom (dev-only test tooling)
-npm start            # launch the desktop game
+npm ci              # install dependencies including the Electron runtime
+npm start           # opens the Electron window; npm run dev does the same
+npm test            # logic, save, packaging and workflow tests
+npm run test:ui     # offline jsdom campaign smoke test
 ```
 
-Browser-only preview of the same build (handy while iterating on UI):
+The renderer loads HTML, ES modules, fonts and images from the application
+bundle. Electron handles `app://conquer/` **in-process** by reading files,
+including inside `app.asar`. No web server or browser fallback is involved.
+The sandboxed preload exposes desktop save/load, fullscreen and updater IPC.
+The gameplay renderer cannot make network connections (`connect-src 'none'`).
+
+### Packaging (maintainers)
 
 ```bash
-npm run dev          # http://localhost:5173
-```
-
-## Verification
-
-```bash
-npm test             # headless tests: worldgen, economy, combat, saves, packaging and CI
-npm run test:ui      # boots the real index.html in jsdom, plays a full campaign turn
-npm run build:web    # browser build in release/web (serve it with scripts/serve.mjs)
-```
-
-`npm run test:ui` drives the actual UI — starts a campaign, recruits, builds, attacks,
-launches a nuke, saves and reloads — and fails on any console error. It also writes
-`tmp-shots/09-jsdom-map.png` (the live pixel map) and `tmp-shots/10-takeover.png`
-(a mid-frame capture of the blocky takeover sweep).
-
-> The desktop shell itself (`electron/main.cjs`) cannot be launched in this sandbox:
-> downloading the Electron binary is blocked here. Everything it depends on — the
-> bundle graph, the `app://` file server, the IPC channel names, the packaging config
-> and the icon assets — is covered by `tests/desktop.test.mjs`.
-
-## Packaging
-
-```bash
-npm run pack         # unpacked app in release/ (fast smoke test)
-npm run dist:win     # NSIS installer + zip  (build/icon.ico)
-npm run dist:mac     # DMG + updater zip, x64 + arm64 (build/icon.icns)
+npm run pack         # unpacked desktop app in release/
+npm run dist:win     # Windows setup and no-install GUI executables
+npm run build:exe    # just the Windows portable Electron executable
+npm run dist:mac     # DMGs and updater zips (arm64 + x64)
 npm run dist:linux   # AppImage + deb
-npm run build:web    # runnable browser build -> release/web + release/*.tar.gz
-npm run get:bun      # fetch the Bun build tool into .buntools/ (once)
-npm run build:exe    # portable single-file executables (.exe + Linux binary)
-npm run icons        # rebuild PNG/ICO/ICNS from assets/icon-pixel-src.png
+npm run icons        # regenerate the bundled application icons
 ```
 
-The `build` block in `package.json` is validated against electron-builder's own
-JSON schema by `npm test` (this is how the `win.publisherName` → `signtoolOptions`
-migration was caught), so a bad packaging key fails in CI rather than at release
-time.
+### Auto-updates
 
-The game is served from a custom **`app://conquer/`** origin instead of `file://`.
-A `file://` page has an opaque origin, which makes the strict CSP in `index.html`
-(`script-src 'self'`) reject the game's ES modules; a registered standard, secure
-scheme gives the page a real origin while still shipping as a plain static bundle.
-If the scheme ever fails to load, `main.cjs` falls back to `loadFile()`.
-
-## Auto-updates
-
-`electron/main.cjs` wires `electron-updater` to the GitHub Releases that the
-release workflow produces (`build.publish` → `OmniNodeCo/Conquer`). In a packaged
-build the app checks a few seconds after launch and then every six hours, streams
-progress to the renderer over the `update:status` channel, and shows the result in
-the bottom-right footer:
-
-| Footer | Meaning |
-| --- | --- |
-| `up to date` | running the newest release |
-| `update v1.2.0 found` / `downloading update 42%` | fetching in the background |
-| `v1.2.0 ready` + **RESTART TO UPDATE** | downloaded, `quitAndInstall` on click |
-| `update check failed` | network/API problem — the game keeps running |
-| `browser build` | not packaged (or updater missing), so no self-update |
-
-The updater module is loaded inside a `try`/`catch`, so a source checkout without
-production dependencies still runs; it simply reports `browser build`. Versions
-must be bumped in **both** `package.json` and the `app-version` meta tag in
-`index.html` — a test fails if the two drift apart.
-
-## Portable executables
-
-`npm run get:bun && npm run build:exe` produces two dependency-free binaries:
-
-| File | Size | Runs on |
-| --- | --- | --- |
-| `release/Conquer-Rule-the-Globe-1.0.0-windows-x64.exe` | ~112 MB | Windows 10/11 x64, no install |
-| `release/Conquer-Rule-the-Globe-1.0.0-linux-x64` | ~106 MB | Linux x64, no install |
-
-Each one carries its own JavaScript runtime (Bun) plus the entire game — HTML,
-ES modules, fonts and artwork — embedded as a base64 payload. Launching it starts
-a private HTTP server on `127.0.0.1:4317` (a fixed port so campaign saves keep the
-same localStorage origin), then opens an app-style browser window
-(`msedge --app=` / `chrome --app=` / `xdg-open`). `--no-open` serves headlessly and
-`--port=N` overrides the port, which is what CI's smoke test uses.
-
-These are a **portable fallback**, not the Electron product: no installer, no code
-signature, and it needs a Chromium-based browser to draw the window. The
-`desktop` and `portable` jobs in `build.yml` build the Electron installers and
-portable binaries, respectively. `release.yml` attaches both to the same release.
-
-Why both exist: Electron's binary downloads (and therefore `electron-builder`) are
-blocked in this sandbox, so the portables are the executables that can actually be
-produced here — verified by launching the Linux build and hashing every served
-file against the repository.
+Installed builds check GitHub Releases on launch and every six hours. Windows
+and Linux use `electron-updater`; signed macOS apps use Squirrel.Mac's native
+HTTPS feed and architecture-specific release zip directly. An offline check
+may fail without interrupting play. The footer shows the version, update status
+and **RESTART TO UPDATE** when a download is ready. The Windows no-install
+edition does not run an installer behind your back: replace the portable `.exe`
+to update. Both editions keep saves in the app's user-data directory.
 
 ## CI and releasing
 
-[Build](.github/workflows/build.yml) has read-only permissions. On branch pushes,
-pull requests and manual runs it runs `npm ci`, `npm test` and `npm run test:ui`,
-then builds the web archives and portable executables. On pushes to `main` and
-manual runs it also builds Windows, macOS and Linux installers. Release artifacts
-are retained for 30 days; UI screenshots are separate, diagnostic artifacts.
+[Build](.github/workflows/build.yml) tests pushes, pull requests and manual
+runs. After tests pass on a push or manual run, it packages the three desktop
+platforms. The Windows job checks the PE GUI subsystem of both `.exe` files
+and the inner game. The Linux smoke test loads the packaged `app.asar` in a
+real Electron window with network requests blocked and checks the title screen.
+Desktop artifacts are kept for 30 days. UI screenshots are diagnostic only.
 
 [Release](.github/workflows/release.yml) publishes **those artifacts**, without
 checking out or rebuilding the game. A successful **push build of `main`**
@@ -224,12 +178,12 @@ To release by hand, use **Actions → Release → Run workflow**:
 A **missing tag** is created at the selected build's SHA. An **existing tag** is
 reused without moving it, even if it points to an older commit. If the release
 already exists, same-named assets are replaced with `--clobber`. The notes link
-to the source build, and `SHA256SUMS.txt` covers the installers, portables, web
-archives and updater files. Failed/PR builds and incomplete artifact sets are not
+to the source build, and `SHA256SUMS.txt` covers the desktop downloads
+and updater files. Failed/PR builds and incomplete artifact sets are not
 published. Both workflows must land on the default branch for the automatic
 handoff and *Run workflow* UI to be available.
 
-Signing secrets used by **Build** (Release needs only the automatic `GITHUB_TOKEN`):
+Signing secrets used by **Build** on `main` (Release needs only the automatic `GITHUB_TOKEN`):
 
 | Secret | Platform | Purpose |
 | --- | --- | --- |
@@ -286,22 +240,9 @@ spctl --assess --type execute -vv "release/mac/Conquer Rule the Globe.app"
 xcrun stapler validate release/*.dmg
 ```
 
-### Honest status
-
-`npx electron-builder --dir` gets as far as resolving the app, validating the
-config and running `@electron/rebuild`, then fails while fetching the Electron
-binary — this sandbox's egress allow-list does not include the release-asset host
-(`release-assets.githubusercontent.com`), so **no Electron installer can be
-produced here**. That is why the installers come from the Build workflow, and
-why `npm run build:exe` exists: it cross-compiles portable single-file executables
-from assets that *are* reachable (the npm registry hosts the Bun runtime).
-
-No code-signing certificate exists in this sandbox (and no certificate authority will
-issue one for an unsigned demo project), so the artifacts you can build here are
-**unsigned** — Windows SmartScreen and macOS Gatekeeper will warn until you sign with
-your own certificate using the variables above. The signing pipeline, entitlements,
-publisher identity and installer targets are all in place and ready to run on a
-machine that holds the certificate.
+This repository does not contain a signing certificate. Windows and macOS
+builds are publisher-signed only when the corresponding credentials are provided.
+Unsigned test builds can trigger SmartScreen or Gatekeeper warnings.
 
 ## Project layout
 
@@ -315,24 +256,19 @@ src/game/render.js         pixel-art map renderer (block layer, borders, takeove
 src/game/ui.js             HUD/inspector/modals, battle forecast + report cards
 src/game/save.js           versioned save/load
 src/game/main.js           app boot, loop, input, handlers
-electron/main.cjs          window, app:// server, IPC save/load, menu
+electron/main.cjs          desktop window, local bundle protocol, save/load, menu
 electron/preload.cjs       window.desktop bridge (sandboxed)
-electron/serve.cjs         testable app:// path resolver
+electron/serve.cjs         in-process reader for bundled renderer assets
 build/                     icons (ico/icns/png set) + mac entitlements
 tests/                     node:test suites (logic + desktop packaging)
 tools/ui-test.mjs          jsdom end-to-end UI harness
 tools/pixelate.mjs         downsample + nearest upscale artwork to true pixel blocks
-tools/build-exe.mjs        embeds the game in Bun and cross-compiles portable binaries
-tools/get-bun.mjs          fetches the Bun build tool from the npm registry
-desktop/launcher.mjs       the portable build's entry point (server + app window)
+tools/desktop-smoke.cjs    CI launch check for the packaged Electron game
 assets/fonts/              self-hosted woff2 (Pixelify Sans, VT323, Silkscreen)
 assets/icon-pixel-src.png  pixel-art icon source, snapped to a 96-block grid
 ```
 
-Save data lives at:
-
-- desktop: `<userData>/campaign.json` (e.g. `%APPDATA%/Conquer Rule the Globe/`)
-- browser preview: `localStorage["conquer.save.v1"]`
+Desktop saves live in `campaign.json` under Electron’s per-user application data directory.
 
 ## License
 

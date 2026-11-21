@@ -73,31 +73,31 @@ jobs:
             exit 1
           fi
 
-          tag=$INPUT_TAG
-          if [[ -z "$tag" ]]; then
-            version=$(gh api "repos/$GH_REPO/contents/package.json?ref=$sha" --jq '.content | @base64d | fromjson | .version')
-            tag="v${version:?missing package version}"
-          fi
+          version=$(gh api "repos/$GH_REPO/contents/package.json?ref=$sha" --jq '.content | @base64d | fromjson | .version')
+          tag=${INPUT_TAG:-v${version:?missing package version}}
           if [[ "$tag" == -* ]] || ! git check-ref-format "refs/tags/$tag"; then
             echo '::error::Invalid release tag.'
             exit 1
           fi
-          printf 'run_id=%s\nsha=%s\ntag=%s\n' "$RUN_ID" "$sha" "$tag" >> "$GITHUB_OUTPUT"
+          printf 'run_id=%s\nsha=%s\ntag=%s\nversion=%s\n' "$RUN_ID" "$sha" "$tag" "$version" >> "$GITHUB_OUTPUT"
 
       - name: Download artifacts from that Build (not this run)
         uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
           run-id: ${{ steps.build.outputs.run_id }}
-          pattern: conquer-*
+          pattern: 'conquer-{windows-x64,macos,linux-x64}'
           path: artifacts
 
-      - name: Stage release assets and checksums
+      - name: Stage desktop assets and checksums
+        env:
+          TAG: ${{ steps.build.outputs.tag }}
+          VERSION: ${{ steps.build.outputs.version }}
         run: |
           set -euo pipefail
           mkdir dist
           # Refuse to publish a partial release if artifacts expired or were removed.
-          for group in conquer-web conquer-portable conquer-windows-x64 conquer-macos conquer-linux-x64; do
+          for group in conquer-windows-x64 conquer-macos conquer-linux-x64; do
             for asset in "artifacts/$group/"*; do
               if [[ ! -s "$asset" || ! -f "$asset" || -e "dist/${asset##*/}" ]]; then
                 echo "::error::Missing, empty or duplicate build asset: $asset"
@@ -106,7 +106,21 @@ jobs:
               mv -- "$asset" dist/
             done
           done
-          (cd dist && sha256sum -- * > SHA256SUMS.txt)
+          cd dist
+          test -s "Conquer-Portable-$VERSION-x64.exe" && test -s "Conquer-Setup-$VERSION-x64.exe" || {
+            echo '::error::Expected desktop GUI executables. Select a newer Build.'; exit 1;
+          }
+          # Squirrel.Mac reads this feed and downloads the architecture-specific signed
+          # zip directly from the selected release. No local update proxy is needed.
+          tag_path=$(jq -rn --arg tag "$TAG" '$tag | @uri')
+          for arch in arm64 x64; do
+            zip="conquer-rule-the-globe-$VERSION-mac-$arch.zip"
+            test -s "$zip"
+            jq -n --arg v "$VERSION" --arg url "$GITHUB_SERVER_URL/$GH_REPO/releases/download/$tag_path/$zip" '
+              {currentRelease: $v, releases: [{version: $v, updateTo: {version: $v, name: $v, url: $url}}]}' \
+              > "conquer-mac-$arch.json"
+          done
+          sha256sum -- * > SHA256SUMS.txt
 
       - name: Create or refresh the release
         env:

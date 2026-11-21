@@ -11,19 +11,24 @@ const build = workflow('build');
 const release = workflow('release');
 const { steps } = release.jobs.publish;
 const upload = (job) => job.steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'));
-const groups = [upload(build.jobs.web).with.name, upload(build.jobs.portable).with.name,
-  ...build.jobs.desktop.strategy.matrix.include.map((entry) => entry.artifact)];
+const groups = build.jobs.desktop.strategy.matrix.include.map((entry) => entry.artifact);
+const version = '2.3.4';
+const desktopAssets = {
+  'conquer-windows-x64': [`Conquer-Setup-${version}-x64.exe`, `Conquer-Portable-${version}-x64.exe`, 'latest.yml'],
+  'conquer-macos': ['arm64', 'x64'].map((arch) => `conquer-rule-the-globe-${version}-mac-${arch}.zip`),
+  'conquer-linux-x64': [`conquer-rule-the-globe-${version}-linux-x64.AppImage`],
+};
 
 test('Build tests before packaging and has no release permissions', () => {
   assert.deepEqual(Object.keys(build.on).sort(), ['pull_request', 'push', 'workflow_dispatch']);
   assert.deepEqual(build.permissions, { contents: 'read' });
   const commands = build.jobs.verify.steps.map((s) => s.run);
   assert.ok(commands.includes('npm ci') && commands.includes('npm test') && commands.includes('npm run test:ui'));
-  for (const job of [build.jobs.web, build.jobs.portable, build.jobs.desktop]) {
-    assert.ok([job.needs].flat().includes('verify'));
-    assert.equal(upload(job).with['if-no-files-found'], 'error');
-  }
   const desktop = build.jobs.desktop;
+  assert.equal(desktop.needs, 'verify');
+  assert.equal(upload(desktop).with['if-no-files-found'], 'error');
+  assert.deepEqual(groups.sort(), Object.keys(desktopAssets).sort());
+  assert.ok(!build.jobs.portable && !build.jobs.web, 'no browser launchers should be published');
   assert.deepEqual(desktop.strategy.matrix.include.map((entry) => entry.target).sort(), ['--linux', '--mac', '--win']);
   const builder = desktop.steps.find((s) => s.run?.includes('electron-builder'));
   assert.match(builder.run, /--publish never/);
@@ -42,7 +47,7 @@ test('Release downloads only the selected Build run, without a checkout or rebui
   const download = steps.find((s) => s.uses?.startsWith('actions/download-artifact@'));
   assert.equal(download.with['run-id'], '${{ steps.build.outputs.run_id }}');
   assert.ok(download.with['github-token']);
-  assert.equal(download.with.pattern, 'conquer-*');
+  assert.equal(download.with.pattern, 'conquer-{windows-x64,macos,linux-x64}');
   assert.doesNotMatch(steps.map((s) => `${s.uses ?? ''}\n${s.run ?? ''}`).join('\n'), /actions\/checkout|npm ci|electron-builder/);
 });
 
@@ -84,7 +89,7 @@ test('manual release defaults to the latest green Build and its version; both in
   for (const [input, run, tag] of [[{}, '200', 'v2.3.4'], [{ RUN_ID: '100', INPUT_TAG: 'preview' }, '100', 'preview']]) {
     const result = select(input);
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.equal(result.stdout.trim(), `run_id=${run}\nsha=${sha}\ntag=${tag}`);
+    assert.equal(result.stdout.trim(), `run_id=${run}\nsha=${sha}\ntag=${tag}\nversion=${version}`);
   }
   for (const metadata of [{ workflow_id: 8 }, { conclusion: 'failure' }, { event: 'pull_request' },
     { head_branch: 'topic' }, { head_repository: { full_name: 'fork/game' } }]) {
@@ -96,16 +101,23 @@ test('Release refuses incomplete downloads and uploads the selected assets for a
   const dir = mkdtempSync(path.join(tmpdir(), 'conquer-release-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const stage = steps.find((s) => s.run?.includes('sha256sum')).run;
-  assert.notEqual(bash(stage, {}, dir).status, 0);
+  const stageEnv = { VERSION: version, TAG: 'preview/test', GITHUB_SERVER_URL: 'https://github.com', GH_REPO: repo };
+  assert.notEqual(bash(stage, stageEnv, dir).status, 0);
   rmSync(path.join(dir, 'dist'), { recursive: true });
-  for (const group of groups) {
+  for (const [group, files] of Object.entries(desktopAssets)) {
     const artifact = path.join(dir, 'artifacts', group);
     mkdirSync(artifact, { recursive: true });
-    writeFileSync(path.join(artifact, `${group}.bin`), group);
+    for (const file of files) writeFileSync(path.join(artifact, file), group);
   }
-  const staged = bash(stage, {}, dir);
+  const staged = bash(stage, stageEnv, dir);
   assert.equal(staged.status, 0, staged.stderr || staged.stdout);
   assert.equal(bash('sha256sum --check SHA256SUMS.txt', {}, path.join(dir, 'dist')).status, 0);
+  for (const arch of ['arm64', 'x64']) {
+    const feed = JSON.parse(readFileSync(path.join(dir, 'dist', `conquer-mac-${arch}.json`), 'utf8'));
+    assert.equal(feed.currentRelease, version);
+    assert.equal(feed.releases[0].updateTo.url,
+      `https://github.com/${repo}/releases/download/preview%2Ftest/conquer-rule-the-globe-${version}-mac-${arch}.zip`);
+  }
 
   const publish = steps.find((s) => s.run?.includes('gh release create')).run;
   const mock = `gh() { if [[ $2 == view ]]; then [[ $EXISTS == yes ]]; else echo "$*"; fi; }`;
@@ -115,7 +127,7 @@ test('Release refuses incomplete downloads and uploads the selected assets for a
     assert.equal(result.status, 0, result.stderr);
     if (exists === 'yes') assert.match(result.stdout, /release upload preview .* --clobber/);
     else assert.match(result.stdout, new RegExp(`release create preview .* --target ${sha}`));
-    for (const group of groups) assert.ok(result.stdout.includes(`dist/${group}.bin`));
+    for (const file of Object.values(desktopAssets).flat()) assert.ok(result.stdout.includes(`dist/${file}`));
     assert.ok(result.stdout.includes('dist/SHA256SUMS.txt'));
   }
 });

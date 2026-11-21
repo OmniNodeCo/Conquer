@@ -11,15 +11,12 @@
   "main": "electron/main.cjs",
   "scripts": {
     "start": "electron .",
-    "dev": "node scripts/dev-server.mjs",
+    "dev": "electron .",
     "test": "node --test tests/*.test.mjs",
     "test:ui": "node tools/ui-test.mjs",
     "verify": "npm test && node tools/ui-test.mjs",
     "icons": "node tools/make-icons.mjs",
-    "build:web": "node tools/build-web.mjs",
-    "get:bun": "node tools/get-bun.mjs",
-    "build:exe": "node tools/build-exe.mjs",
-    "build:all": "node tools/build-web.mjs && node tools/build-exe.mjs",
+    "build:exe": "electron-builder --win portable --x64 --publish never",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
@@ -39,7 +36,7 @@
   "build": {
     "appId": "com.conquerstudio.ruletheglobe",
     "productName": "Conquer Rule the Globe",
-    "copyright": "Copyright © 2026 Conquer Studio",
+    "copyright": "Copyright \u00a9 2026 Conquer Studio",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -70,7 +67,7 @@
           ]
         },
         {
-          "target": "zip",
+          "target": "portable",
           "arch": [
             "x64"
           ]
@@ -87,7 +84,8 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "Conquer"
+      "shortcutName": "Conquer",
+      "artifactName": "Conquer-Setup-${version}-${arch}.${ext}"
     },
     "mac": {
       "category": "public.app-category.strategy-games",
@@ -121,6 +119,10 @@
       "category": "Game",
       "icon": "build/icons",
       "maintainer": "Conquer Studio <support@conquer.example>"
+    },
+    "portable": {
+      "artifactName": "Conquer-Portable-${version}-${arch}.${ext}",
+      "requestExecutionLevel": "user"
     }
   },
   "engines": {

@@ -1,15 +1,7 @@
 name: Build
 
-# Continuous integration for Conquer: Rule the Globe.
-#
-#   push to any branch   -> tests + web bundle + portable executables
-#   pull request         -> the same, nothing is published
-#   push to main         -> additionally the signed desktop installers
-#   manual dispatch      -> everything, every platform
-#
-# Nothing here publishes. `release.yml` picks up the artifacts of the newest
-# successful run of this workflow and turns them into a GitHub Release.
-
+# Tests on every push/PR. Pushes and manual runs also produce real desktop apps.
+# Only main is signed; Release consumes these artifacts, never a browser launcher.
 on:
   push:
     branches:
@@ -72,85 +64,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  web:
-    name: Web bundle
-    needs: [version, verify]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Build the browser bundle
-        run: npm run build:web
-
-      - name: Check and archive the bundle
-        working-directory: release
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          test -s web/index.html
-          test -s web/src/game/main.js
-          tar -tzf "conquer-web-$VERSION.tar.gz" >/dev/null
-          zip -qr "conquer-web-$VERSION.zip" web
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: conquer-web
-          path: |
-            release/conquer-web-*.zip
-            release/conquer-web-*.tar.gz
-          if-no-files-found: error
-          retention-days: 30
-
-  portable:
-    name: Portable executables
-    needs: verify
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      # Single-file executables with an embedded runtime: no installer, no
-      # dependencies on the target machine, built by cross-compiling Bun.
-      - name: Fetch the Bun build tool
-        run: npm run get:bun
-
-      - name: Build portable executables
-        run: npm run build:exe
-
-      - name: Smoke-test the Linux executable
-        run: |
-          set -euo pipefail
-          chmod +x release/*-linux-x64
-          ./release/*-linux-x64 --no-open --port=5199 &
-          SERVER=$!
-          trap 'kill "$SERVER" 2>/dev/null || true' EXIT
-          curl -fsS --retry-connrefused --retry 15 --retry-delay 1 http://127.0.0.1:5199/ -o "$RUNNER_TEMP/game.html"
-          grep -q 'CONQUER' "$RUNNER_TEMP/game.html"
-          curl -sf http://127.0.0.1:5199/src/game/main.js >/dev/null
-          echo "portable executable served the game successfully"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: conquer-portable
-          path: |
-            release/*.exe
-            release/*-linux-x64
-          if-no-files-found: error
-          retention-days: 30
-
   desktop:
-    name: Installers (${{ matrix.name }})
+    name: Desktop app (${{ matrix.name }})
     needs: verify
-    # Installers take minutes per platform: build them for main and on demand.
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
+    env:
+      SIGN_BUILD: ${{ github.ref == 'refs/heads/main' }}
     strategy:
       fail-fast: false
       matrix:
@@ -183,21 +103,42 @@ jobs:
         shell: bash
         env:
           # Do not expose one platform's signing credentials to another runner.
-          WIN_CSC_LINK: ${{ runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
-          WIN_CSC_KEY_PASSWORD: ${{ runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
-          CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK && 'true' || 'false' }}
-          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+          WIN_CSC_LINK: ${{ env.SIGN_BUILD == 'true' && runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ env.SIGN_BUILD == 'true' && runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+          CSC_LINK: ${{ env.SIGN_BUILD == 'true' && runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ env.SIGN_BUILD == 'true' && runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ env.SIGN_BUILD == 'true' && runner.os == 'macOS' && secrets.MAC_CSC_LINK && 'true' || 'false' }}
+          APPLE_ID: ${{ env.SIGN_BUILD == 'true' && runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ env.SIGN_BUILD == 'true' && runner.os == 'macOS' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ env.SIGN_BUILD == 'true' && runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         run: |
           # On macOS an unset link means no certificate; an empty link is still imported.
           if [[ -z "$CSC_LINK" ]]; then unset CSC_LINK; fi
           npx electron-builder ${{ matrix.target }} --publish never
 
-      - name: Verify the Windows signature
+      - name: Verify Windows launchers use the GUI subsystem (not a console)
         if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $apps = @(Get-Item 'release/Conquer-Portable-*.exe', 'release/Conquer-Setup-*.exe', 'release/win-unpacked/Conquer Rule the Globe.exe')
+          if ($apps.Count -ne 3) { throw 'Expected the portable, installer and unpacked game' }
+          foreach ($app in $apps) {
+            $pe = [IO.BinaryReader]::new($app.OpenRead())
+            try {
+              $pe.BaseStream.Position = 0x3c
+              $peOffset = $pe.ReadUInt32()
+              $pe.BaseStream.Position = $peOffset + 24 + 68 # PE signature, COFF header, Subsystem field
+              if ($pe.ReadUInt16() -ne 2) { throw "$($app.Name) is not a Windows GUI executable" }
+            } finally { $pe.Dispose() }
+          }
+
+      - name: Smoke-test the packaged game in a desktop window
+        timeout-minutes: 2
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node_modules/.bin/electron --no-sandbox tools/desktop-smoke.cjs release/linux-unpacked/resources/app.asar
+
+      - name: Verify the Windows signature
+        if: runner.os == 'Windows' && env.SIGN_BUILD == 'true'
         shell: pwsh
         env:
           SIGNED: ${{ secrets.WIN_CSC_LINK && 'yes' || 'no' }}
@@ -209,7 +150,7 @@ jobs:
           }
 
       - name: Verify the macOS signature
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && env.SIGN_BUILD == 'true'
         env:
           SIGNED: ${{ secrets.MAC_CSC_LINK && 'yes' || 'no' }}
           NOTARIZED: ${{ secrets.APPLE_ID && secrets.APPLE_APP_SPECIFIC_PASSWORD && secrets.APPLE_TEAM_ID && 'yes' || 'no' }}
@@ -236,7 +177,7 @@ jobs:
 
   summary:
     name: Summary
-    needs: [version, verify, web, portable, desktop]
+    needs: [version, verify, desktop]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -250,7 +191,5 @@ jobs:
             echo "| Job | Result |"
             echo "| --- | --- |"
             echo "| Test | ${{ needs.verify.result }} |"
-            echo "| Web bundle | ${{ needs.web.result }} |"
-            echo "| Portable executables | ${{ needs.portable.result }} |"
             echo "| Installers | ${{ needs.desktop.result }} |"
           } >> "$GITHUB_STEP_SUMMARY"

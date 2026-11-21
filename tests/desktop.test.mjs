@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const { resolveAppPath } = require('../electron/serve.cjs');
+const { resolveAppPath, readAppFile } = require('../electron/serve.cjs');
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -35,7 +35,8 @@ test('electron entry points parse and stay sandboxed', () => {
   assert.match(main, /sandbox: true/);
   assert.match(main, /registerSchemesAsPrivileged/);
   assert.match(main, /requestSingleInstanceLock/);
-  assert.match(main, /did-fail-load/, 'file:// fallback must be wired up');
+  assert.match(main, /new BrowserWindow\(/);
+  assert.doesNotMatch(main, /shell\.openExternal|Bun\.serve|\.listen\(|node:(?:http|net)\b/);
 
   const preload = fs.readFileSync(path.join(ROOT, 'electron/preload.cjs'), 'utf8');
   for (const channel of ['game:save', 'game:load', 'game:quit', 'game:toggle-fullscreen', 'app:info']) {
@@ -57,6 +58,20 @@ test('app:// resolver keeps requests inside the bundle root', () => {
   assert.equal(resolveAppPath('/bad%zz', ROOT), null);
   assert.equal(resolveAppPath('', ROOT), null);
   assert.equal(resolveAppPath(undefined, ROOT), null);
+});
+
+test('the desktop origin reads HTML, modules and fonts straight from the bundle', async () => {
+  for (const [name, mime] of [['index.html', 'text/html'], ['src/game/main.js', 'text/javascript'],
+    ['src/styles/main.css', 'text/css'], ['assets/fonts/silkscreen.woff2', 'font/woff2']]) {
+    const res = await readAppFile(`app://conquer/${name}`, ROOT);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type').split(';')[0], mime);
+    assert.deepEqual(Buffer.from(await res.arrayBuffer()), fs.readFileSync(path.join(ROOT, name)));
+  }
+  assert.equal((await readAppFile('https://conquer/index.html', ROOT)).status, 404);
+  assert.equal((await readAppFile('app://other/index.html', ROOT)).status, 404);
+  assert.equal((await readAppFile('app://conquer/electron/main.cjs', ROOT)).status, 403);
+  assert.equal((await readAppFile('app://conquer/assets/not-there.png', ROOT)).status, 404);
 });
 
 test('every asset referenced by index.html ships with the app', () => {
@@ -169,8 +184,8 @@ test('auto-updates are wired to the GitHub releases', () => {
   assert.match(main, /require\('electron-updater'\)/, 'main process must load the updater');
   assert.match(main, /quitAndInstall/, 'the shell must be able to install an update');
   assert.match(preload, /onUpdateStatus/, 'the renderer needs update events');
-  // The updater is optional at runtime: a missing module must not break the game.
-  assert.match(main, /try \{[\s\S]{0,200}electron-updater/);
+  assert.match(main, /require\('electron'\)\.autoUpdater/);
+  assert.match(main, /serverType: 'json'/, 'macOS reads a static HTTPS feed rather than a local proxy');
 });
 
 test('the electron-builder config validates against its own schema', () => {
@@ -187,20 +202,14 @@ test('the electron-builder config validates against its own schema', () => {
   assert.equal(pkg.build.win.publisherName, undefined);
 });
 
-test('the portable executable launcher is self-contained', () => {
-  const launcher = fs.readFileSync(path.join(ROOT, 'desktop/launcher.mjs'), 'utf8');
-  assert.match(launcher, /Bun\.serve/, 'the launcher hosts the game itself');
-  assert.match(launcher, /'--no-open'/, 'headless mode is needed for smoke tests');
-  assert.match(launcher, /4317/, 'a stable default port keeps save data on one origin');
-  assert.match(launcher, /font\/woff2/, 'fonts must be served with the right type');
-  assert.match(launcher, /--app=\$\{url\}/, 'opens an app-style browser window');
-
-  const builder = fs.readFileSync(path.join(ROOT, 'tools/build-exe.mjs'), 'utf8');
-  assert.match(builder, /bun-windows-x64/, 'cross-builds a Windows executable');
-  assert.match(builder, /bun-linux-x64/, 'builds a Linux executable');
-  assert.match(builder, /base64/, 'assets are embedded in the binary');
-  assert.ok(pkg.scripts['build:exe'], 'npm run build:exe must exist');
-  assert.ok(pkg.scripts['get:bun'], 'npm run get:bun must exist');
+test('even the no-install Windows executable is the Electron GUI, not a browser launcher', () => {
+  assert.deepEqual(pkg.build.win.target.map(({ target }) => target).sort(), ['nsis', 'portable']);
+  assert.notEqual(pkg.build.nsis.artifactName, pkg.build.portable.artifactName);
+  assert.match(pkg.scripts['build:exe'], /electron-builder --win portable/);
+  assert.equal(pkg.scripts.dev, 'electron .');
+  assert.ok(pkg.build.linux.target.includes('AppImage'));
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  assert.match(html, /connect-src 'none'/, 'gameplay must not need any network service');
 });
 
 test('packaged file list covers source, assets and the electron shell', () => {

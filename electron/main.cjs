@@ -1,27 +1,14 @@
 // Electron main process for Conquer: Rule the Globe.
-const { app, BrowserWindow, ipcMain, shell, Menu, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, protocol } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
-const { pathToFileURL } = require('node:url');
-const { resolveAppPath } = require('./serve.cjs');
+const { APP_HOST, readAppFile } = require('./serve.cjs');
 
 const isDev = !app.isPackaged;
 let mainWindow = null;
 
-// electron-updater is optional: if it is missing (e.g. a source checkout without
-// the production dependencies) the game still runs, it just cannot self-update.
-let updaterRef = null;
-function loadUpdater() {
-  if (updaterRef !== null) return updaterRef || null;
-  try {
-    // eslint-disable-next-line global-require
-    updaterRef = require('electron-updater').autoUpdater;
-  } catch (err) {
-    console.warn('[conquer] auto-updater unavailable:', err.message);
-    updaterRef = false;
-  }
-  return updaterRef || null;
-}
+let updater = null;
+let updateReady = false;
 
 function sendUpdate(status) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -33,7 +20,6 @@ function sendUpdate(status) {
 // page has a real, securable origin. A file:// page has an opaque origin, which
 // makes `script-src 'self'` in index.html reject the game's module scripts.
 const APP_SCHEME = 'app';
-const APP_HOST = 'conquer';
 const APP_ORIGIN = `${APP_SCHEME}://${APP_HOST}`;
 const APP_ROOT = path.join(__dirname, '..');
 
@@ -44,6 +30,7 @@ protocol.registerSchemesAsPrivileged([
       standard: true,
       secure: true,
       supportFetchAPI: true,
+      corsEnabled: true,
       stream: true,
       codeCache: true,
     },
@@ -63,7 +50,7 @@ function createWindow() {
     backgroundColor: '#050c13',
     show: false,
     title: 'Conquer: Rule the Globe',
-    icon: path.join(__dirname, '..', 'build', 'icon.png'),
+    icon: path.join(APP_ROOT, 'assets', 'icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -75,17 +62,12 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadURL(`${APP_ORIGIN}/index.html`);
-
-  // If the custom protocol somehow fails (e.g. an unusual packaging layout),
-  // fall back to plain file:// loading rather than showing a blank window.
-  let fellBack = false;
-  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-    if (!isMainFrame || fellBack) return;
-    if (!validatedURL.startsWith(`${APP_ORIGIN}/`)) return;
-    fellBack = true;
-    console.error(`[conquer] app:// load failed (${errorCode} ${errorDescription}); falling back to file://`);
-    mainWindow.loadFile(path.join(APP_ROOT, 'index.html'));
+  // This is a single-window game, not a browser. Never hand a URL to the OS.
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
+  mainWindow.loadURL(`${APP_ORIGIN}/index.html`).catch(() => {
+    dialog.showErrorBox('Conquer could not open', 'The game files could not be loaded. Please reinstall Conquer.');
+    app.quit();
   });
 
   mainWindow.once('ready-to-show', () => {
@@ -93,11 +75,6 @@ function createWindow() {
     if (isDev && process.env.CONQUER_DEVTOOLS === '1') {
       mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
-  });
-
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
-    return { action: 'deny' };
   });
 
   mainWindow.on('closed', () => {
@@ -117,35 +94,30 @@ function createWindow() {
   });
 }
 
-// Serve the game bundle from APP_ROOT over the app:// scheme.
-function serveAppFiles() {
-  protocol.handle(APP_SCHEME, async (request) => {
-    try {
-      const { host, pathname } = new URL(request.url);
-      if (host !== APP_HOST) return new Response('Not found', { status: 404 });
-
-      const target = resolveAppPath(pathname, APP_ROOT);
-      if (!target) return new Response('Forbidden', { status: 403 });
-      return await net.fetch(pathToFileURL(target).toString());
-    } catch (err) {
-      console.error('[conquer] protocol error', err);
-      return new Response('Internal error', { status: 500 });
-    }
-  });
-}
-
-// Auto-updates come from the GitHub Releases published by release.yml. The
-// updater only runs in a packaged build; a dev checkout reports "browser build"
-// in the footer instead of hammering the API.
+// Only update checks use the internet; the game itself runs from disk. A portable
+// Windows copy must not download the NSIS installer over the standalone exe.
 function setupAutoUpdater() {
-  const updater = loadUpdater();
-  if (!updater) {
-    sendUpdate({ state: 'unsupported', message: 'updater unavailable' });
+  if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_FILE) return;
+  try {
+    if (process.platform === 'darwin') {
+      // MacUpdater proxies downloads through a loopback HTTP server. Squirrel.Mac
+      // can consume a static JSON feed and the signed zip directly over HTTPS.
+      updater = require('electron').autoUpdater;
+      updater.setFeedURL({
+        url: `https://github.com/OmniNodeCo/Conquer/releases/latest/download/conquer-mac-${process.arch}.json`,
+        serverType: 'json',
+      });
+    } else {
+      updater = require('electron-updater').autoUpdater;
+      updater.autoDownload = true;
+      updater.autoInstallOnAppQuit = true;
+      updater.logger = null;
+    }
+  } catch (error) {
+    console.warn('[conquer] updates unavailable:', error.message);
+    updater = null;
     return;
   }
-  updater.autoDownload = true;
-  updater.autoInstallOnAppQuit = true;
-  updater.logger = null;
 
   updater.on('checking-for-update', () => sendUpdate({ state: 'checking' }));
   updater.on('update-available', (info) => sendUpdate({ state: 'available', version: info?.version }));
@@ -153,27 +125,27 @@ function setupAutoUpdater() {
   updater.on('download-progress', (progress) =>
     sendUpdate({ state: 'downloading', percent: Math.round(progress?.percent || 0) })
   );
-  updater.on('update-downloaded', (info) => sendUpdate({ state: 'ready', version: info?.version }));
-  updater.on('error', (err) => {
-    console.warn('[conquer] update error:', err?.message || err);
-    sendUpdate({ state: 'error', message: String(err?.message || err) });
+  updater.on('update-downloaded', (info, _notes, releaseName) => {
+    updateReady = true;
+    sendUpdate({ state: 'ready', version: info?.version || releaseName });
   });
+  updater.on('error', (error) => sendUpdate({ state: 'error', message: error.message }));
+  // The renderer makes the first check once the footer is listening.
+  setInterval(checkForUpdates, 6 * 60 * 60 * 1000).unref();
+}
 
-  const check = () => {
-    if (!app.isPackaged) {
-      sendUpdate({ state: 'unsupported', message: 'development build' });
-      return;
-    }
-    updater.checkForUpdates().catch((err) => {
-      sendUpdate({ state: 'error', message: String(err?.message || err) });
-    });
-  };
-
-  app.whenReady().then(() => {
-    setTimeout(check, 4000);
-    setInterval(check, 6 * 60 * 60 * 1000);
-  });
-  return { check, updater };
+async function checkForUpdates() {
+  if (!updater) {
+    sendUpdate({ state: 'unsupported', message: process.env.PORTABLE_EXECUTABLE_FILE ? 'portable edition' : 'updates unavailable' });
+    return { ok: false, error: 'updater-unavailable' };
+  }
+  try {
+    const result = await updater.checkForUpdates(); // Squirrel.Mac returns void and emits events.
+    return { ok: true, version: result?.updateInfo?.version || null };
+  } catch (error) {
+    sendUpdate({ state: 'error', message: error.message });
+    return { ok: false, error: error.message };
+  }
 }
 
 function buildMenu() {
@@ -210,11 +182,11 @@ if (!gotLock) {
     }
   });
 
-  app.whenReady().then(async () => {
-    serveAppFiles();
+  app.whenReady().then(() => {
+    protocol.handle(APP_SCHEME, ({ url }) => readAppFile(url, APP_ROOT));
     buildMenu();
-    createWindow();
     setupAutoUpdater();
+    createWindow();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -257,21 +229,10 @@ ipcMain.handle('game:toggle-fullscreen', () => {
   return mainWindow.isFullScreen();
 });
 
-ipcMain.handle('update:check', async () => {
-  const updater = loadUpdater();
-  if (!updater) return { ok: false, error: 'updater-unavailable' };
-  if (!app.isPackaged) return { ok: false, error: 'not-packaged' };
-  try {
-    const result = await updater.checkForUpdates();
-    return { ok: true, version: result?.updateInfo?.version || null };
-  } catch (err) {
-    return { ok: false, error: String(err?.message || err) };
-  }
-});
+ipcMain.handle('update:check', checkForUpdates);
 
 ipcMain.handle('update:install', () => {
-  const updater = loadUpdater();
-  if (!updater || !app.isPackaged) return false;
+  if (!updater || !updateReady) return false;
   updater.quitAndInstall();
   return true;
 });

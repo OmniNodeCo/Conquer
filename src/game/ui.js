@@ -454,7 +454,7 @@ export class UI {
         el.textContent = 'checking for updates…';
         break;
       case 'available':
-        el.textContent = `update v${status.version} found`;
+        el.textContent = status.version ? `update v${status.version} found` : 'update found';
         el.classList.add('available');
         break;
       case 'downloading':
@@ -462,7 +462,7 @@ export class UI {
         el.classList.add('available');
         break;
       case 'ready':
-        el.textContent = `v${status.version} ready`;
+        el.textContent = status.version ? `v${status.version} ready` : 'update ready';
         el.classList.add('available');
         if (btn) btn.classList.remove('hidden');
         break;
@@ -474,7 +474,7 @@ export class UI {
         el.classList.add('error');
         break;
       case 'unsupported':
-        el.textContent = 'browser build';
+        el.textContent = status.message || 'updates unavailable';
         break;
       default:
         el.textContent = status.message || '';
