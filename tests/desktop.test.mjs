@@ -106,7 +106,8 @@ test('the ES module graph from main.js resolves to real files', () => {
 
 test('build config asks for a signed Windows and macOS release', () => {
   const win = pkg.build.win;
-  assert.equal(win.signtoolOptions.publisherName, 'Conquer Studio');
+  assert.equal(win.signtoolOptions.publisherName, 'OmniNodeCo');
+  assert.equal(pkg.author.name, win.signtoolOptions.publisherName, 'installer Publisher and executable CompanyName must match the expected signer');
   assert.equal(win.signAndEditExecutable, true);
   assert.ok(win.target.some((t) => t.target === 'nsis'), 'needs an installer target');
   assert.ok(win.icon.endsWith('icon.ico'));

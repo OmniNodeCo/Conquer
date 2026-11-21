@@ -209,9 +209,15 @@ export CSC_KEY_PASSWORD='pfx-password'
 npm run dist:win
 ```
 
-`package.json` sets `win.signtoolOptions.publisherName` to
-`Conquer Studio`, and `signAndEditExecutable: true` so the exe is signed and
-version-stamped. To verify a produced artifact:
+The installer publisher, executable company name and expected Windows update signer
+are **OmniNodeCo** (`author.name` and `build.win.signtoolOptions.publisherName`).
+Windows gets **Verified publisher** from the Authenticode certificate, not these
+metadata fields. To display that name, configure `WIN_CSC_LINK` and
+`WIN_CSC_KEY_PASSWORD` for builds of `main` with a trusted code-signing certificate
+whose subject common name (CN) is exactly `OmniNodeCo`. Signed builds check both
+signature validity and the signer name before uploading the executables. Unsigned
+builds do not gain a verified publisher. To inspect a signed download in Windows,
+right-click the `.exe` and choose **Properties → Digital Signatures**. From PowerShell:
 
 ```powershell
 Get-AuthenticodeSignature .\release\Conquer*.exe | Format-List

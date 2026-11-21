@@ -144,9 +144,12 @@ jobs:
           SIGNED: ${{ secrets.WIN_CSC_LINK && 'yes' || 'no' }}
         run: |
           if ($env:SIGNED -eq 'no') { Write-Host 'No Windows signing certificate configured.'; exit 0 }
-          Get-ChildItem release -Filter *.exe | ForEach-Object {
-            $sig = Get-AuthenticodeSignature $_.FullName
+          $expectedPublisher = (Get-Content -Raw package.json | ConvertFrom-Json).build.win.signtoolOptions.publisherName
+          Get-Item 'release/*.exe', 'release/win-unpacked/Conquer Rule the Globe.exe' | ForEach-Object {
+            $sig = Get-AuthenticodeSignature -LiteralPath $_.FullName
             if ($sig.Status -ne 'Valid') { throw "Invalid signature on $($_.Name): $($sig.Status)" }
+            $publisher = $sig.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+            if ($publisher -cne $expectedPublisher) { throw "Wrong signer on $($_.Name): expected '$expectedPublisher', got '$publisher'" }
           }
 
       - name: Verify the macOS signature

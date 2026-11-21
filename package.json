@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "A desktop grand-strategy game of world conquest: build your nation, raise armies, invade coasts, launch nukes and take 80% of the globe.",
   "author": {
-    "name": "Conquer Studio"
+    "name": "OmniNodeCo"
   },
   "license": "MIT",
   "type": "module",
@@ -36,7 +36,7 @@
   "build": {
     "appId": "com.conquerstudio.ruletheglobe",
     "productName": "Conquer Rule the Globe",
-    "copyright": "Copyright \u00a9 2026 Conquer Studio",
+    "copyright": "Copyright \u00a9 2026 OmniNodeCo",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -76,7 +76,7 @@
       "icon": "build/icon.ico",
       "signAndEditExecutable": true,
       "signtoolOptions": {
-        "publisherName": "Conquer Studio"
+        "publisherName": "OmniNodeCo"
       }
     },
     "nsis": {
@@ -118,7 +118,7 @@
       ],
       "category": "Game",
       "icon": "build/icons",
-      "maintainer": "Conquer Studio <support@conquer.example>"
+      "maintainer": "OmniNodeCo <support@conquer.example>"
     },
     "portable": {
       "artifactName": "Conquer-Portable-${version}-${arch}.${ext}",
