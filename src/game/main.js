@@ -15,13 +15,13 @@ import {
   launchNuke,
   makePeace,
   quickAttack,
-  canBuild,
   BUILDINGS,
   nationProvinces,
   worldShare,
   pushLog,
 } from './state.js';
-import { tileOwner } from './fronts.js';
+import { heldCell, nationSeat, tileOwner } from './fronts.js';
+import { siteAt } from './buildings.js';
 import { generateWorld, findProvinceAt, cellAt } from './worldgen.js';
 import { MapView } from './render.js';
 import { SoundEngine } from './audio.js';
@@ -219,13 +219,15 @@ class App {
   }
 
   onKey(ev) {
+    // Escape must work in the finder search box. Never pan, arm a slot, or
+    // unpause the game while the player is navigating a dialog with the keyboard.
+    if (!this.ui.el.modalRoot.classList.contains('hidden')) {
+      if (ev.key === 'Escape') { ev.preventDefault(); this.ui.closeModal(); }
+      return;
+    }
     const tag = document.activeElement?.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     if (ev.key === 'Escape') {
-      if (!document.getElementById('modal-root').classList.contains('hidden')) {
-        this.ui.closeModal();
-        return;
-      }
       if (this.state?.mode === 'nuke') {
         this.setNukeMode(false);
         return;
@@ -259,6 +261,10 @@ class App {
         if (key) this.handlers.toggleBuildSlot(key);
         break;
       }
+      case 'l':
+      case 'L':
+        this.ui.openLandFinder();
+        break;
       case 'f':
       case 'F':
         this.focusCapital();
@@ -308,17 +314,22 @@ class App {
     const [wx, wy] = this.view.screenToWorld(sx, sy);
     const prov = findProvinceAt(this.world, wx, wy);
     const id = prov ? prov.id : null;
-    const ownerId = prov ? tileOwner(prov, cellAt(this.world, wx, wy)) : null;
-    if (id !== this.view.hoveredId || ownerId !== this.hoveredOwner) {
+    const cell = cellAt(this.world, wx, wy);
+    const ownerId = prov ? tileOwner(prov, cell) : null;
+    const site = prov && (siteAt(prov, cell) || this.view.atlas.siteAtPoint(prov, wx, wy));
+    const siteKey = site ? `${site.key}:${site.cell}:${site.level}` : '';
+    if (id !== this.view.hoveredId || ownerId !== this.hoveredOwner || siteKey !== this.hoveredSiteKey) {
       this.hoveredOwner = ownerId;
+      this.hoveredSiteKey = siteKey;
       this.view.hoveredId = id;
       this.hoverProvince = prov;
       this.canvas.style.cursor = prov ? 'pointer' : 'crosshair';
       if (prov && this.state) {
         const owner = this.state.nations[ownerId];
         const ownerName = owner ? owner.name : prov.tribe || 'Free territory';
+        const landmark = site ? `<b>${BUILDINGS[site.key].name} · Lv ${site.level}</b><br/>` : '';
         this.ui.showTooltip(
-          `<b>${prov.name}</b><br/>${ownerName} · ${prov.terrain}<br/>Garrison ${Math.round((prov.fronts.get(ownerId)?.troops ?? prov.troops) * 1000).toLocaleString()}`,
+          `${landmark}<b>${prov.name}</b><br/>${ownerName} · ${prov.terrain}<br/>Garrison ${Math.round((prov.fronts.get(ownerId)?.troops ?? prov.troops) * 1000).toLocaleString()}`,
           sx,
           sy
         );
@@ -351,22 +362,18 @@ class App {
     this.ui.update(state, 0);
   }
 
-  placeBuild(id) {
+  placeBuild(id, cell) {
     const state = this.state;
     const prov = state.provinces[id];
     const key = this.buildMode;
     if (!key) return;
-    if (prov.nationId !== state.playerNationId) {
-      this.ui.toast('You can only build inside your own borders.', 'loss');
-      return;
-    }
-    const res = build(state, state.playerNationId, prov, key);
+    const res = build(state, state.playerNationId, prov, key, cell);
     if (!res.ok) {
       this.ui.toast(res.reason, 'loss');
       return;
     }
     this.audio.cash();
-    this.ui.toast(`${BUILDINGS[key].name} raised in ${prov.name}.`, 'info', '◆');
+    this.ui.toast(`${BUILDINGS[key].name} ${res.site.level > 1 ? `upgraded to Lv ${res.site.level}` : 'placed'} in ${prov.name}.`, 'info', '◆');
     this.ui.markDirty();
     this.handlers.selectProvince(id);
     // Stay in placement mode for rapid building, but drop it when gold runs out.
@@ -397,7 +404,12 @@ class App {
       this.confirmNuke(prov);
       return;
     }
-    this.handlers.clickProvince(prov.id, cellAt(this.world, wx, wy));
+    const cell = cellAt(this.world, wx, wy);
+    // An upgrade may hit the roof rather than its central parcel. Never snap
+    // across an occupied tile, or change the aim of a normal assault.
+    const site = this.buildMode && tileOwner(prov, cell) === this.state.playerNationId
+      ? siteAt(prov, cell) || this.view.atlas.siteAtPoint(prov, wx, wy) : null;
+    this.handlers.clickProvince(prov.id, site?.cell ?? cell);
   }
 
   // -------------------------------------------------------------- game flow
@@ -405,6 +417,9 @@ class App {
     this.screen = 'title';
     this.state = null;
     this.previewState = null;
+    this.buildMode = null;
+    this.ui.setBuildMode(null);
+    this.lastOwnProvinceId = null;
     this.ui.showScreen('title');
     this.ui.deselect();
     const seedEl = document.getElementById('title-seed');
@@ -502,6 +517,7 @@ class App {
   }
 
   adoptState(state) {
+    if (!this.ui.el.modalRoot.classList.contains('hidden')) this.ui.closeModal();
     this.state = state;
     this.world = state.world;
     this.view.setWorld(state.world);
@@ -514,9 +530,9 @@ class App {
     this.state.started = true;
     this.state.paused = true;
     this.lastLogId = state.log[0]?.id ?? 0;
-    const player = state.nations[state.playerNationId];
-    const seat = state.provinces[player.capitalId];
-    if (seat) this.view.focusProvince(seat, 1.0);
+    this.buildMode = null;
+    this.ui.setBuildMode(null);
+    this.focusCapital();
     this.ui.update(state, 0);
     this.minimapDirty = true;
   }
@@ -528,17 +544,9 @@ class App {
 
   focusCapital() {
     if (!this.state) return;
-    const player = this.state.nations[this.state.playerNationId];
-    const seat =
-      this.state.provinces[player.capitalId] &&
-      this.state.provinces[player.capitalId].nationId === player.id
-        ? this.state.provinces[player.capitalId]
-        : nationProvinces(this.state, player.id)[0];
-    if (seat) {
-      this.view.focusProvince(seat, 1.2);
-      this.handlers.selectProvince(seat.id);
-      this.minimapDirty = true;
-    }
+    const { world, player } = this.state;
+    const home = nationSeat(world, player);
+    if (home) this.handlers.locateProvince(home.id, heldCell(home, player.id));
   }
 
   deselect() {
@@ -595,11 +603,7 @@ class App {
         const prov = self.state.provinces[id];
         if (!prov) return;
         if (self.buildMode) {
-          if (prov.nationId === self.state.playerNationId && tileOwner(prov, aim) !== prov.nationId) {
-            self.ui.toast('Reclaim this ground before building here.', 'info');
-            return;
-          }
-          self.placeBuild(id);
+          self.placeBuild(id, aim);
           return;
         }
         self.handlers.selectProvince(id);
@@ -611,7 +615,7 @@ class App {
         if (!self.state || !BUILDINGS[key]) return;
         self.buildMode = self.buildMode === key ? null : key;
         self.ui.setBuildMode(self.buildMode);
-        if (self.buildMode) self.ui.toast(`${BUILDINGS[key].name} — click one of your provinces.`, 'info', '◆');
+        if (self.buildMode) self.ui.toast(`${BUILDINGS[key].name} — click a tile on your land.`, 'info', '◆');
         self.ui.update(self.state, 0);
       },
       installUpdate() {
@@ -628,23 +632,24 @@ class App {
         self.ui.update(self.state, 0);
         self.audio.select();
       },
-      locateProvince(id) {
+      locateProvince(id, cell = null) {
         if (!self.state) return;
         const prov = self.state.provinces[id];
-        if (!prov) return;
-        self.view.focusProvince(prov, Math.max(1.1, self.view.camera.zoom));
+        if (!prov || (cell !== null && self.world.provinceAt[cell] !== id)) return;
+        self.view.locate(prov, cell ?? prov.seatCell);
         self.minimapDirty = true;
-        self.handlers.selectProvince(id);
+        self.ui.hideTooltip();
+        self.view.hoveredId = null;
+        self.handlers.selectProvince(id); // navigation is never an attack or build order
       },
+      goHome() { self.focusCapital(); },
       focusNation(id) {
         if (!self.state) return;
         self.ui.selectNation(id);
         self.ui.update(self.state, 0);
-        const provs = nationProvinces(self.state, id);
-        if (provs.length) {
-          const capital = self.state.provinces[self.state.nations[id].capitalId];
-          const target = capital && capital.nationId === id ? capital : provs[0];
-          self.view.focusProvince(target, Math.max(0.75, Math.min(1.2, self.view.camera.zoom)));
+        const home = nationSeat(self.world, self.state.nations[id]);
+        if (home) {
+          self.view.focusProvince(home, Math.max(0.75, Math.min(1.2, self.view.camera.zoom)), heldCell(home, id));
           self.minimapDirty = true;
         }
       },
@@ -958,7 +963,7 @@ class App {
 
   handlePendingDialog() {
     const state = this.state;
-    if (!state || !state.pendingDialog) return;
+    if (!state || !state.pendingDialog || !this.ui.el.modalRoot.classList.contains('hidden')) return;
     const dialog = state.pendingDialog;
     state.pendingDialog = null;
     this.handlers.pauseForMenu();

@@ -344,6 +344,8 @@ export function generateWorld(seed = 12345, options = {}) {
     const cx = clamp(Math.round(centroid[0] / PIXEL), 0, GRID_W - 1);
     const cy = clamp(Math.round(centroid[1] / PIXEL), 0, GRID_H - 1);
     const gi = cy * GRID_W + cx;
+    const distanceToCentre = i => (i % GRID_W + 0.5 - centroid[0] / PIXEL) ** 2
+      + (Math.floor(i / GRID_W) + 0.5 - centroid[1] / PIXEL) ** 2;
 
     provinces.push({
       id: provinces.length,
@@ -355,6 +357,8 @@ export function generateWorld(seed = 12345, options = {}) {
       centroid,
       area: pixels.length * PIXEL * PIXEL,
       areaPx: pixels.length,
+      // A polygon centroid may be in the sea. Anchor the village and map navigation on actual land.
+      seatCell: pixels.reduce((best, cell) => distanceToCentre(cell) < distanceToCentre(best) ? cell : best),
       cells: pixels, // indices in provinceAt; the same parcels are drawn, fought over and hit-tested.
       elevation: elev[gi],
       moisture: moisture[gi],
@@ -906,6 +910,10 @@ export function provinceContains(province, x, y) {
     if (pointInRing(x, y, ring)) return true;
   }
   return false;
+}
+
+export function cellCenter(world, cell) {
+  return [(cell % world.gridW + 0.5) * world.pixel, (Math.floor(cell / world.gridW) + 0.5) * world.pixel];
 }
 
 export function cellAt(world, x, y) {

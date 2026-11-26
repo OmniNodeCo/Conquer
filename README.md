@@ -58,10 +58,17 @@ before the window appears; launch it once and leave your saved data in place.
 - **Tap to conquer** — a single click on foreign land immediately sends a quarter of
   the strongest available army on that border. A breakthrough advances farther;
   a costly push still takes a few tiles. No slider, no confirmation dialog.
-- **Build hotbar** — a bar along the bottom holds every structure (City, Castle,
-  Port, Factory, Missile Silo, AA Battery, keys `1`-`6`). Arm a slot, then click
-  your own provinces to place; placement stays armed for rapid building and
-  disarms itself when you run out of gold.
+- **Find my land** — click your flag in the top bar or press `L`. Search your
+  provinces, footholds and buildings by name. Select a result to
+  centre the map without attacking, spending gold or placing anything. The
+  minimap's gold flag, **Home** button and `F` shortcut follow your capital, or
+  your largest remaining holding if the capital falls.
+- **Build hotbar** — arm a structure (`1`–`6`), then click a tile you hold in
+  your province. A little pixel city, castle, battery, harbour, factory or silo
+  stays on that parcel. Hover over its icon for its name and level. Build the
+  same type on that icon to upgrade it, or use another clear tile for a new site;
+  costs and level caps are still per province. Inspector and bot orders choose
+  their own sites. `Esc` cancels placement.
 - **AA batteries** — a new defensive building: each level has a 35% + 25% chance
   (capped at 85%) of shooting an incoming warhead out of the sky, and it stiffens
   the province's defence.
@@ -87,8 +94,9 @@ before the window appears; launch it once and leave your saved data in place.
   news only interrupts when your nation is in it. AI drafts no longer spray `+15,000`
   floaters across the map, and distant advances only glint briefly.
 - **Persistence** — autosave plus manual save/load; the desktop build writes a real
-  `campaign.json` in the OS user-data folder through Electron IPC. Older v1
-  campaigns still load, with their original borders and no active footholds.
+  `campaign.json` in the OS user-data folder through Electron IPC. Sites, their
+  levels and occupied tiles survive save/load. Older v1/v2 campaigns keep their building bonuses;
+  structures without saved coordinates receive stable sites in their province.
 
 ## Controls
 
@@ -100,7 +108,8 @@ before the window appears; launch it once and leave your saved data in place.
 | `1`-`6` | Arm a build hotbar slot |
 | Click across a border | Advance into that province |
 | Click enemy-held tiles in your own province | Counterattack with the local garrison |
-| `F` | Focus your capital |
+| Click your flag / `L` | Open **Find my land**; search for a province or building |
+| Minimap **Home** / `F` | Return to your capital or remaining home province |
 | `H` | How to play |
 | `Esc` | Deselect, then menu |
 | `F11` | Fullscreen |
@@ -113,8 +122,9 @@ to press the front, or rest to muster reserves. When the last defending tile fal
 the largest occupier takes the province; other footholds stay in place. The
 inspector still offers a manual commitment slider.
 
-Building: press a hotbar key (`1`-`6`) or click a slot, then click one of your
-provinces. `Esc` cancels placement.
+Building: press a hotbar key (`1`-`6`) or click a slot, then click a clear tile
+on your land. Ports need a coastal province. A tile under enemy occupation must
+be reclaimed first. `Esc` cancels placement.
 
 | Hotbar | Structure |
 | --- | --- |
@@ -171,7 +181,8 @@ platforms. The Windows job starts the actual portable `.exe` without flags or a
 profile override. It waits for a native window with the title the renderer sets
 **after** the title screen initializes, then closes it and checks for a clean exit.
 On Windows and Linux, a second test loads the packaged `app.asar` in Electron
-with networking blocked and starts a campaign using the on-screen buttons.
+with networking blocked, starts a campaign, builds a city and locates its site
+using the on-screen buttons.
 Desktop artifacts are kept for 30 days. UI screenshots are diagnostic only.
 
 [Release](.github/workflows/release.yml) publishes **those artifacts**, without

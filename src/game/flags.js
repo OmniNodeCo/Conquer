@@ -163,9 +163,10 @@ const FLAG_CACHE = new Map();
 
 export function flagFor(nation) {
   if (!nation) return '';
-  if (FLAG_CACHE.has(nation.id)) return FLAG_CACHE.get(nation.id);
+  const key = `${nation.id}:${nation.color}`; // IDs repeat on newly rolled worlds.
+  if (FLAG_CACHE.has(key)) return FLAG_CACHE.get(key);
   const url = renderFlag(nation);
-  FLAG_CACHE.set(nation.id, url);
+  FLAG_CACHE.set(key, url);
   return url;
 }
 

@@ -1316,3 +1316,26 @@ option,
 .front-caption, .muster-note { color: var(--muted); font-size: 12px; line-height: 1.35; }
 .front-caption b { color: #f4d789; }
 .muster-note { margin-top: 6px; }
+
+/* Realm atlas: both the flag in the main HUD and the index are navigation, not orders. */
+#player-chip { text-align: left; }
+#player-chip .nation-text i, .atlas-link { color: var(--gold); }
+#player-chip:hover, #player-chip:focus-visible { border-color: var(--gold); background: var(--panel-raised); }
+.minimap-tools .mini-home { width: auto; padding: 0 7px; color: var(--gold); }
+.atlas-nation { display: flex; gap: 12px; align-items: center; margin: 14px 0 18px; padding: 12px; background: #142633; border-left: 3px solid var(--gold); }
+.atlas-nation .flag { flex: none; }
+.atlas-nation b, .atlas-place b { display: block; font-size: 16px; }
+.atlas-nation small, .atlas-place small, .atlas-note { display: block; margin-top: 3px; font-size: 12px; color: var(--muted-2); }
+.atlas-nation .btn { margin-left: auto; color: var(--gold-bright); }
+.atlas-search { display: block; color: var(--muted-2); font-size: 12px; }
+#atlas-query { width: 100%; margin: 5px 0 10px; padding: 9px 12px; font: 15px var(--font); color: var(--text); background: var(--bg-deep); border: 1px solid var(--line); user-select: text; }
+#atlas-query:focus { outline: 1px solid var(--gold); outline-offset: 0; }
+#atlas-results { max-height: min(42vh, 420px); overflow-y: auto; overscroll-behavior: contain; list-style: none; padding: 0; margin: 0 0 12px; border-block: 1px solid var(--line); scrollbar-width: thin; }
+#atlas-results li + li { border-top: 1px solid var(--line-soft); }
+.atlas-place { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 9px 10px; text-align: left; }
+.atlas-place:hover, .atlas-place:focus-visible, .atlas-sites button:hover { background: var(--panel-raised); }
+.atlas-sites { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 10px 10px; }
+.atlas-sites button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; color: var(--gold-bright); border: 1px solid var(--line); font-size: 12px; }
+.atlas-sites svg { width: 15px; height: 15px; }
+.atlas-empty { padding: 18px 10px; color: var(--muted); }
+.modal-actions:empty { display: none; }

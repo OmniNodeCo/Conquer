@@ -4,7 +4,7 @@ import { icon } from './icons.js';
 import { flagFor } from './flags.js';
 import { TERRAIN } from './worldgen.js';
 import { formatTroops } from './render.js';
-import { heldTiles, sectorGuard } from './fronts.js';
+import { heldCell, heldTiles, nationSeat, sectorGuard, tileOwner } from './fronts.js';
 import {
   BUILDINGS,
   TUNING,
@@ -116,7 +116,7 @@ export class UI {
       hud: document.getElementById('hud'),
       playerFlag: document.getElementById('player-flag'),
       playerName: document.getElementById('player-name'),
-      playerGov: document.getElementById('player-gov'),
+      playerChip: document.getElementById('player-chip'),
       gold: document.getElementById('stat-gold'),
       income: document.getElementById('stat-income'),
       manpower: document.getElementById('stat-manpower'),
@@ -205,6 +205,8 @@ export class UI {
     }
 
     document.getElementById('btn-menu').addEventListener('click', () => this.openMenu());
+    this.el.playerChip.addEventListener('click', () => this.openLandFinder());
+    document.getElementById('btn-home').addEventListener('click', () => this.h.goHome());
     document.getElementById('btn-help').addEventListener('click', () => this.openHelp());
     document.getElementById('btn-zoom-in').addEventListener('click', () => this.h.zoom(1.25));
     document.getElementById('btn-zoom-out').addEventListener('click', () => this.h.zoom(0.8));
@@ -273,6 +275,9 @@ export class UI {
         this.h.attack(Number(el.dataset.target), sourceId, percent);
         break;
       }
+      case 'find-land':
+        this.openLandFinder();
+        break;
       case 'locate':
         this.h.locateProvince(id);
         break;
@@ -370,6 +375,12 @@ export class UI {
     if (!state) return;
 
     const player = state.nations[state.playerNationId];
+    if (this.hudPlayer !== player) {
+      this.hudPlayer = player;
+      this.el.playerName.textContent = player.name;
+      this.el.playerFlag.style.cssText = flagStyle(player);
+      this.el.playerChip.setAttribute('aria-label', `Find my land: ${player.fullName} (L)`);
+    }
     const income = nationIncome(state, state.playerNationId) - nationArmy(state, state.playerNationId) * TUNING.upkeepPerTroop;
     const regen = nationManpowerRegen(state, state.playerNationId);
     const own = nationProvinces(state, state.playerNationId).length;
@@ -432,8 +443,8 @@ export class UI {
     if (this.el.bbHint) {
       this.el.bbHint.classList.toggle('placing', !!this.buildMode);
       this.el.bbHint.textContent = this.buildMode
-        ? `PLACING ${BUILDINGS[this.buildMode].name.toUpperCase()} — CLICK YOUR PROVINCE · ESC CANCELS`
-        : 'Pick a structure, then click one of your provinces · keys 1-6';
+        ? `PLACING ${BUILDINGS[this.buildMode].name.toUpperCase()} — CLICK A TILE YOU HOLD · ESC CANCELS`
+        : 'Pick a structure, then click a tile on your land · keys 1–6';
     }
   }
 
@@ -586,7 +597,7 @@ export class UI {
       return;
     }
     const p = this.inspectorMode === 'province' && state.provinces[this.inspectorId];
-    const key = `${this.inspectorMode}:${this.inspectorId}:${p?.nationId}:${p?.frontRevision || 0}`;
+    const key = `${this.inspectorMode}:${this.inspectorId}:${p?.nationId}:${p?.frontRevision || 0}:${p?.buildRevision || 0}`;
     if (key !== this.inspectorKey || this.dirtyInspector) {
       this.inspectorKey = key;
       this.dirtyInspector = false;
@@ -824,7 +835,7 @@ export class UI {
     const wars = nation.wars.map((wid) => state.nations[wid]).filter(Boolean).slice(0, 4);
 
     const actions = isPlayer
-      ? `<button class="btn small" data-action="locate" data-id="${nation.capitalId}">Locate capital</button>`
+      ? `<button class="btn small" data-action="find-land">Find my land</button>`
       : `<div class="recruit-row">
           ${
             atWar
@@ -917,12 +928,14 @@ export class UI {
 
   // ------------------------------------------------------------------ modals
   openModal({ kicker = '', title = '', sub = '', body = '', actions = [], wide = false, onMount = null }) {
+    if (this.el.modalRoot.classList.contains('hidden')) this.beforeModal = document.activeElement;
     this.el.modalRoot.classList.remove('hidden');
+    this.el.hud.inert = true;
     this.el.modal.classList.toggle('wide', wide);
     this.el.modal.innerHTML = `
-      <button class="modal-close" data-modal-action="close">✕</button>
+      <button class="modal-close" aria-label="Close dialog" data-modal-action="close">✕</button>
       ${kicker ? `<div class="modal-kicker">${kicker}</div>` : ''}
-      ${title ? `<h2 class="modal-title">${title}</h2>` : ''}
+      ${title ? `<h2 id="modal-title" class="modal-title">${title}</h2>` : ''}
       ${sub ? `<p class="modal-sub">${sub}</p>` : ''}
       <div class="modal-body">${body}</div>
       <div class="modal-actions">
@@ -950,7 +963,72 @@ export class UI {
   closeModal() {
     this.el.modalRoot.classList.add('hidden');
     this.el.modal.innerHTML = '';
+    this.el.hud.inert = false;
+    this.beforeModal?.focus();
+    this.beforeModal = null;
     this.h.modalClosed();
+  }
+
+  openLandFinder() {
+    const state = this.state;
+    if (!state?.started) return;
+    this.h.pauseForMenu();
+    this.hideTooltip();
+    const { player, world } = state;
+    const home = nationSeat(world, player);
+    const provinces = nationProvinces(state, player.id);
+    const footholds = state.provinces.filter(p => p.fronts.has(player.id));
+    const places = [...provinces, ...footholds].sort((a, b) =>
+      Number(b === home) - Number(a === home) ||
+      Number(b.nationId === player.id) - Number(a.nationId === player.id) || a.name.localeCompare(b.name));
+    this.openModal({
+      kicker: 'REALM ATLAS', title: 'Find my land',
+      body: `<div class="atlas-nation">
+          <span class="flag" style="${flagStyle(player, 40, 28)}"></span>
+          <div><b>${player.fullName}</b><small>${provinces.length} province${provinces.length === 1 ? '' : 's'} · ${footholds.length} foothold${footholds.length === 1 ? '' : 's'} · ${pct(worldShare(state), 1)} of the globe</small></div>
+          <button type="button" class="btn small" id="atlas-home" ${home ? '' : 'disabled'}>Go home</button>
+        </div>
+        <label class="atlas-search">Search your territory
+          <input id="atlas-query" type="search" autocomplete="off" placeholder="Province or building name…">
+        </label>
+        <ul id="atlas-results" aria-label="Held territory"></ul>
+        <small class="atlas-note">Pick a province or a building to see it on the map. No orders are issued.</small>`,
+      onMount: modal => {
+        const input = modal.querySelector('#atlas-query'), list = modal.querySelector('#atlas-results');
+        const render = () => {
+          const q = input.value.trim().toLowerCase();
+          list.innerHTML = places.map(p => {
+            const own = p.nationId === player.id;
+            const label = !own ? 'Foothold' : p === home ? (p.id === player.capitalId ? 'Capital' : 'Home province') : 'Province';
+            const provinceMatch = `${p.name} ${label}`.toLowerCase().includes(q);
+            const sites = own ? p.sites.filter(s => provinceMatch || `${s.key} ${BUILDINGS[s.key].name}`.toLowerCase().includes(q)) : [];
+            if (!provinceMatch && !sites.length) return '';
+            const cell = heldCell(p, player.id);
+            return `<li>
+              <button class="atlas-place" data-find-province="${p.id}" data-cell="${cell}">
+                <span><b>${p.name}</b><small>${label} · ${fmtInt(heldTiles(p, player.id))} tiles held</small></span>
+                <span class="atlas-link">Locate ›</span>
+              </button>
+              ${sites.length ? `<div class="atlas-sites">${sites.map(s => {
+                const def = BUILDINGS[s.key];
+                return `<button data-find-province="${p.id}" data-cell="${s.cell}" title="Locate ${def.name} in ${p.name}">
+                  ${icon(def.icon)} ${def.name}${s.level > 1 ? ` · Lv ${s.level}` : ''}${tileOwner(p, s.cell) !== player.id ? ' · occupied' : ''}</button>`;
+              }).join('')}</div>` : ''}
+            </li>`;
+          }).join('') || `<li class="atlas-empty">${places.length ? 'No matching provinces or buildings.' : 'You hold no territory.'}</li>`;
+        };
+        input.addEventListener('input', render);
+        list.addEventListener('click', ev => {
+          const btn = ev.target.closest('[data-find-province]');
+          if (!btn) return;
+          this.closeModal();
+          this.h.locateProvince(Number(btn.dataset.findProvince), Number(btn.dataset.cell));
+        });
+        modal.querySelector('#atlas-home').addEventListener('click', () => { this.closeModal(); this.h.goHome(); });
+        render();
+        input.focus();
+      },
+    });
   }
 
   openMenu() {
@@ -1004,7 +1082,7 @@ export class UI {
             <h4>The basics</h4>
             <ul>
               <li>Time runs at one steady pace. Hit <b>Space</b> to pause and resume.</li>
-              <li>Click any province to inspect it. Your provinces show recruitment and construction.</li>
+              <li>Click your flag’s <b>Find my land</b> button to locate a province, foothold or building without issuing orders.</li>
               <li>Tap foreign land to send a quarter of a border army. Each push takes a patch of ground.</li>
               <li>Tap enemy-coloured ground inside your own province to push them back.</li>
             </ul>
@@ -1014,6 +1092,7 @@ export class UI {
             <ul>
               <li><b>Gold</b> flows from provinces every second. Cities and ports raise it.</li>
               <li><b>Manpower</b> refills from population. After 3s of rest, reserves automatically join depleted garrisons.</li>
+              <li>Pick a structure with <b>1–6</b>, then click a tile you hold. Its pixel icon stays there. Build the same type on that tile to upgrade it.</li>
               <li>Armies cost upkeep every second. Bankrupt armies still fight, but you cannot recruit.</li>
             </ul>
           </div>
@@ -1040,7 +1119,8 @@ export class UI {
               <div class="kbd-row"><span>Pause / resume</span><kbd>Space</kbd></div>
               <div class="kbd-row"><span>Pan map</span><kbd>drag</kbd> / <kbd>arrows</kbd></div>
               <div class="kbd-row"><span>Zoom</span><kbd>scroll</kbd> / <kbd>+</kbd> <kbd>−</kbd></div>
-              <div class="kbd-row"><span>Jump to capital</span><kbd>F</kbd></div>
+              <div class="kbd-row"><span>Go home</span><kbd>F</kbd></div>
+              <div class="kbd-row"><span>Find my land</span><kbd>L</kbd></div>
               <div class="kbd-row"><span>Quick save</span><kbd>Ctrl</kbd>+<kbd>S</kbd></div>
               <div class="kbd-row"><span>Close panel / cancel</span><kbd>Esc</kbd></div>
               <div class="kbd-row"><span>This manual</span><kbd>H</kbd></div>

@@ -8,6 +8,8 @@ import { valueNoise2 } from './noise.js';
 const INK = {
   s: '#453e43', t: '#765237', d: '#315349', g: '#528159', l: '#94b66a',
   h: '#d3ca83', r: '#776b6c', m: '#a09a87', n: '#e9e4c9', a: '#c2875c',
+  k: '#283339', v: '#cf6550', i: '#e7bc89', u: '#6382a0', o: '#cdd9d3',
+  j: '#487186', p: '#f7db8d',
   b: '#9a5341', w: '#f4c678', c: '#d3aa73', e: '#4c8590', f: '#a6cfc4',
 };
 // Transparent dots are intentional negative space: flags and land remain readable.
@@ -23,13 +25,41 @@ const STAMPS = {
   camp: ['..n..', '.nnc.', 'ncstc', 'sssss'],
   cottage: ['...b....', '..aab.t.', '.aaabbb.', 'bbbbsbb.', '.cwwcsc.', '.cstccc.', '.sssss..'],
   keep: ['..w.....', '..s..n..', 'n.s.nmn.', 'mnnnrmr.', 'mwwmrmr.', 'rmmmnmr.', 'rmssmmr.', 'sssssss.'],
-  mill: ['.....mr.', '.....rr.', '..c..mr.', '.ababrm.', 'bbbbbbr.', '.cwccwr.', '.stsssr.'],
   wave: ['...f....', '.ee.ffe.'],
   swell: ['....e..', '..ee.ee'],
   sail: ['...n...', '..nn...', '.nnn...', '...t...', 'baaatbb', '.sssss.'],
 };
+// All six construction stamps share an 11-ink-pixel footprint, centred on the
+// parcel. Strong rooflines and a dark plinth keep them legible over any flag.
+const SITE_SIZE = 11;
+const SITE_STAMPS = {
+  city: [   // A pair of terracotta townhouses with lit windows.
+    '......k....', '.....kvk...', '..k.kvvvk..', '.kvkvvvbbk.', 'kvvbkinkik.',
+    'kbbbkippik.', '.kipkikkik.', '.kikkippik.', '.kipkisrik.', '.kiskisrik.', '.kkkkkkkkk.',
+  ],
+  fort: [   // Crenellated towers, pennant and a dark gate.
+    '....kpp....', '....kp.....', '.ok.k..oko.', '.omkoooomo.', '.umumuumuk.',
+    '.uouuuuouk.', '.ukumukmuk.', '.uuukkkuuk.', '.uoukskuok.', 'kmmukskummk', 'kkkkkkkkkkk',
+  ],
+  aa: [     // Twin barrels pointing skyward on a low field carriage.
+    '.........ok', '........ouk', '.......ouk.', '.....okuk..', '....oukk...',
+    '...oukgk...', '..kdglggk..', '.kdgggdddk.', 'kmmmmmrrrmk', '.kskokoks..', '..kk...kk..',
+  ],
+  port: [   // A white sail above a blue harbour and a timber pier.
+    '.....k.....', '....nk.....', '...nnkn....', '..nnnkon...', '.nnnnkoon..',
+    '.....t.....', '.kbaaaaabk.', 'ejjkbttkkje', 'kcccccctttk', '.tk.je..tk.', '.kkjjfe.kk.',
+  ],
+  factory: [ // Banded stack and a saw-toothed brick works.
+    '.......ooo.', '......ko...', '......kvk..', '......kok..', '...k..kvk..',
+    '..kak.kbk..', '.kaabkbbbk.', 'kvvvvbaabk.', 'kbppbppbbk.', 'kbrrbsstbk.', 'kkkkkkkkkkk',
+  ],
+  silo: [   // Red-tipped silver rocket in a reinforced bunker.
+    '.....v.....', '....kvk....', '....kok....', '...koonk...', '...konmk...',
+    '...kvvbk...', '..ukonmku..', '.ummuuummu.', 'kouukkkumuk', 'kuuuupuupuk', 'kkkkkkkkkkk',
+  ],
+};
 export function stamp(ctx, name, x, y, scale = 1) {
-  const rows = STAMPS[name];
+  const rows = STAMPS[name] || SITE_STAMPS[name];
   for (let dy = 0; dy < rows.length; dy++) for (let dx = 0; dx < rows[dy].length; dx++) {
     const ink = INK[rows[dy][dx]];
     if (ink) { ctx.fillStyle = ink; ctx.fillRect(x + dx * scale, y + dy * scale, scale, scale); }
@@ -74,14 +104,33 @@ export class PixelAtlas {
     }
     this.scenery = surface(w * 2, h * 2);
     this.paper = surface(w * 2, h * 2);
-    this.seats = world.provinces.map(p => {
-      const cx = p.centroid[0] / world.pixel, cy = p.centroid[1] / world.pixel;
-      const rank = i => (i % w + 0.5 - cx) ** 2 + (Math.floor(i / w) + 0.5 - cy) ** 2;
-      return p.cells.reduce((a, b) => rank(a) < rank(b) ? a : b);
-    });
+    this.siteSymbols = {};
+    this.siteMarks = [];
+    for (const key of Object.keys(SITE_STAMPS)) {
+      const image = surface(SITE_SIZE, SITE_SIZE);
+      stamp(image.getContext('2d'), key, 0, 0);
+      this.siteSymbols[key] = image;
+    }
     this.wavelets = [];
     this.capitals = new Set(world.nations.map(n => n.capitalId));
     this.illustrate();
+  }
+
+  siteOrigin(cell) {
+    const w = this.world.gridW, half = SITE_SIZE >> 1;
+    return [(cell % w) * 2 + 1 - half, Math.floor(cell / w) * 2 + 1 - half];
+  }
+
+  // The ink of an existing roof is an upgrade target, but its transparent
+  // corners aren't. Read live sites (also works before the next atlas repaint).
+  siteAtPoint(prov, wx, wy) {
+    const u = this.world.pixel / 2;
+    for (let i = (prov?.sites?.length ?? 0) - 1; i >= 0; i--) {
+      const site = prov.sites[i], [x, y] = this.siteOrigin(site.cell);
+      const dx = Math.floor(wx / u) - x, dy = Math.floor(wy / u) - y;
+      if (INK[SITE_STAMPS[site.key][dy]?.[dx]]) return site;
+    }
+    return null;
   }
 
   illustrate() {
@@ -132,7 +181,7 @@ export class PixelAtlas {
         continue;
       }
       if (rng() > (['forest','jungle','mountain'].includes(p.terrain) ? 0.9 : 0.52)) continue;
-      const seat = this.seats[p.id];
+      const seat = p.seatCell;
       if (Math.abs(seat % w - x) < 4 && Math.abs(Math.floor(seat/w) - y) < 4) continue;
       if ([-2*w-2,-2*w+2,2*w-2,2*w+2].some(d => !land[i+d]) || runoff[i] > 28) continue;
       stamp(ctx, rng.pick(biomeStamps[p.terrain]), x*2-3, y*2-4);
@@ -155,7 +204,7 @@ export class PixelAtlas {
     const u = this.world.pixel / 2, w = this.world.gridW;
     for (const p of state.provinces) {
       if (p.nationId !== state.playerNationId || !p.replacementDue || !state.player.replacementRate) continue;
-      const seat = this.seats[p.id];
+      const seat = p.seatCell;
       const stride = Math.floor(state.time * 3 + p.id) % 6;
       // One little coat and a pair of marching boots, rather than +troops text.
       const x = (seat % w * 2 - 6 + stride) * u, y = (Math.floor(seat / w) * 2 + 2) * u;
@@ -209,12 +258,23 @@ export class PixelAtlas {
         ctx.fillRect(x, y-3, 3, 1);
       }
       if (p.nationId === null) continue;
-      const i = this.seats[p.id], x = i % w * 2, y = Math.floor(i/w)*2;
-      const fort = this.capitals.has(p.id) || p.buildings?.fort;
-      stamp(ctx, fort ? 'keep' : p.buildings?.factory ? 'mill' : 'cottage', x-3, y-5);
-      if (p.buildings?.city) stamp(ctx, 'cottage', x+3, y-2);
+      const i = p.seatCell, x = i % w * 2, y = Math.floor(i/w)*2;
+      stamp(ctx, this.capitals.has(p.id) ? 'keep' : 'cottage', x-3, y-5);
       ctx.fillStyle = this.world.nations[owners[i]].color;
       ctx.fillRect(x-1,y-5,3,2);
+    }
+    // Paint sites last: a neighbouring province's trees, village or camp must
+    // not erase a player's landmark. Reserve their world bounds for label layout.
+    const u = this.world.pixel / 2;
+    this.siteMarks.length = 0;
+    for (const p of provinces) for (const site of p.sites || []) {
+      const [x, y] = this.siteOrigin(site.cell);
+      ctx.drawImage(this.siteSymbols[site.key], x, y);
+      if (site.level > 1) {
+        ctx.fillStyle = INK.p;
+        for (let i = 0; i < site.level; i++) ctx.fillRect(x + 3 + i*2, y + SITE_SIZE-1, 1, 1);
+      }
+      this.siteMarks.push({ x: x*u, y: y*u, size: SITE_SIZE*u });
     }
     return this.paper;
   }

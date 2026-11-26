@@ -12,6 +12,27 @@ export function heldTiles(prov, id) {
   return home;
 }
 
+// The seat and its locator always point at land still held by the nation,
+// including a camp when looking up a foothold in another country's province.
+export function heldCell(prov, id) {
+  if (prov.nationId !== id) return prov.fronts?.get(id)?.tiles.values().next().value ?? null;
+  if (tileOwner(prov, prov.seatCell) === id) return prov.seatCell;
+  return prov.cells.find(i => tileOwner(prov, i) === id) ?? null;
+}
+
+export function nationSeat(world, nation) {
+  if (!nation?.alive) return null;
+  const capital = world.provinces[nation.capitalId];
+  if (capital?.nationId === nation.id && heldTiles(capital, nation.id) > 0) return capital;
+  let best = null, most = 0;
+  for (const prov of world.provinces) {
+    if (prov.nationId !== nation.id) continue;
+    const held = heldTiles(prov, nation.id);
+    if (held > most) { best = prov; most = held; }
+  }
+  return best;
+}
+
 // Soldiers fight over one sector, not the entire garrison on every tap. As its
 // perimeter contracts the remaining defenders are concentrated on less ground.
 export function sectorGuard(prov, id = prov.nationId) {

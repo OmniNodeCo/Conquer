@@ -3,62 +3,12 @@
 // diplomacy, nukes and victory conditions.
 
 import { makeRng } from './rng.js';
-import { generateWorld, TERRAIN } from './worldgen.js';
+import { generateWorld, TERRAIN, cellCenter } from './worldgen.js';
 import { dist, clamp } from './geom.js';
 import { runAiTurn } from './ai.js';
 import { advanceTiles, heldTiles, sectorGuard, tileOwner } from './fronts.js';
-
-export const BUILDINGS = {
-  city: {
-    key: 'city',
-    name: 'City',
-    icon: 'city',
-    cost: 60,
-    max: 3,
-    blurb: '+40% income, +25% manpower per level',
-  },
-  fort: {
-    key: 'fort',
-    name: 'Castle',
-    icon: 'fort',
-    cost: 50,
-    max: 3,
-    blurb: '+28% defence per level',
-  },
-  aa: {
-    key: 'aa',
-    name: 'AA Battery',
-    icon: 'aa',
-    cost: 120,
-    max: 2,
-    blurb: 'Shoots down incoming warheads (35% +25% per level)',
-  },
-  port: {
-    key: 'port',
-    name: 'Port',
-    icon: 'port',
-    cost: 70,
-    max: 1,
-    blurb: 'Enables naval invasions out of this province',
-    requiresCoastal: true,
-  },
-  factory: {
-    key: 'factory',
-    name: 'Factory',
-    icon: 'factory',
-    cost: 80,
-    max: 2,
-    blurb: '+20% recruit discount and +15% income per level',
-  },
-  silo: {
-    key: 'silo',
-    name: 'Missile Silo',
-    icon: 'silo',
-    cost: 300,
-    max: 1,
-    blurb: 'Allows building nuclear weapons',
-  },
-};
+import { BUILDINGS, canBuild, initBuildings, addBuildingLevels, removeBuildingLevel } from './buildings.js';
+export { BUILDINGS, canBuild, buildingCost } from './buildings.js';
 
 export const DIFFICULTY = {
   easy: { key: 'easy', label: 'Recruit', aiIncome: 0.8, aiAggro: 0.65, startGold: 180, aiBonusArmy: 0 },
@@ -156,7 +106,7 @@ export function createGame({
   // Runtime province state.
   for (const prov of world.provinces) {
     const isCapitol = world.nations.some((n) => n.capitalId === prov.id);
-    prov.buildings = { city: 0, fort: 0, port: 0, factory: 0, silo: 0, aa: 0 };
+    initBuildings(prov);
     prov.isCapital = isCapitol;
     prov.nukeTarget = false;
     prov.fronts = new Map();
@@ -380,38 +330,16 @@ export function recruit(state, nationId, prov, count) {
   return { ok: true };
 }
 
-export function buildingCost(prov, key) {
-  const def = BUILDINGS[key];
-  const level = prov.buildings[key] || 0;
-  return Math.round(def.cost * (1 + level * 0.65));
-}
-
-export function canBuild(state, nationId, prov, key) {
-  const def = BUILDINGS[key];
-  if (!def) return { ok: false, reason: 'Unknown building' };
-  if (prov.nationId !== nationId) return { ok: false, reason: 'Not your province' };
-  const level = prov.buildings[key] || 0;
-  if (level >= def.max) return { ok: false, reason: 'Maximum level reached' };
-  if (def.requiresCoastal && !prov.coastal) return { ok: false, reason: 'Requires a coastal province' };
-  const cost = buildingCost(prov, key);
-  if (state.nations[nationId].gold < cost) return { ok: false, reason: 'Not enough gold' };
-  return { ok: true, cost, level };
-}
-
-export function build(state, nationId, prov, key) {
-  const check = canBuild(state, nationId, prov, key);
+export function build(state, nationId, prov, key, cell = null) {
+  const check = canBuild(state, nationId, prov, key, cell);
   if (!check.ok) return check;
   state.nations[nationId].gold -= check.cost;
-  prov.buildings[key] = (prov.buildings[key] || 0) + 1;
+  const site = addBuildingLevels(prov, key, check.cell);
   state.landRevision++;
-  addEffect(state, {
-    type: 'build',
-    x: prov.centroid[0],
-    y: prov.centroid[1],
-    ttl: 1.6,
-  });
-  pushLog(state, `${BUILDINGS[key].name} built in ${prov.name}.`, 'build', prov.id);
-  return { ok: true };
+  const [x, y] = cellCenter(state.world, site.cell);
+  addEffect(state, { type: 'build', x, y, ttl: 1.6 });
+  pushLog(state, `${BUILDINGS[key].name} ${site.level > 1 ? 'upgraded' : 'built'} in ${prov.name}.`, 'build', prov.id);
+  return { ok: true, site };
 }
 
 // ---------------------------------------------------------------------------
@@ -692,8 +620,9 @@ export function captureProvince(state, prov, nationId, survivors = 0) {
   const previous = prov.nationId;
   prov.nationId = nationId;
   prov.troops = Math.max(0, survivors);
-  // Ports survive but silos are scuttled; keep it simple: silos destroyed.
-  prov.buildings.silo = 0;
+  // A change of flag does not move the buildings. Only the silo is scuttled.
+  removeBuildingLevel(prov, 'silo');
+  state.landRevision++;
   if (previous !== null) {
     state.nations[previous].provincesLost = (state.nations[previous].provincesLost || 0) + 1;
   }
@@ -801,9 +730,7 @@ export function launchNuke(state, nationId, targetProv) {
   targetProv.troops *= 0.12;
   targetProv.population = Math.max(0.2, targetProv.population * 0.72);
   targetProv.value = Math.max(0.6, targetProv.value * 0.7);
-  if (targetProv.buildings.city > 0) targetProv.buildings.city -= 1;
-  if (targetProv.buildings.fort > 0) targetProv.buildings.fort -= 1;
-  if (targetProv.buildings.factory > 0) targetProv.buildings.factory -= 1;
+  for (const key of ['city', 'fort', 'factory']) removeBuildingLevel(targetProv, key);
 
   for (const other of state.nations) {
     if (other.id === nationId) continue;

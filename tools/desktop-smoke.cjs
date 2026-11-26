@@ -49,6 +49,19 @@ app.once('browser-window-created', (_event, win) => {
       `);
       assert.equal(started, true, 'Begin Campaign must open the playable map');
       console.log('Packaged game opened its title screen and started a campaign offline.');
+      const located = await win.webContents.executeJavaScript(`(() => {
+        const city = document.querySelector('#inspector [data-action="build"][data-key="city"]:enabled');
+        if (!city) return false;
+        city.click();
+        document.getElementById('player-chip').click();
+        const site = document.querySelector('#atlas-results .atlas-sites button');
+        if (!site || !site.textContent.includes('City')) return false;
+        site.click();
+        return document.getElementById('modal-root').classList.contains('hidden') &&
+          !document.getElementById('inspector').classList.contains('hidden');
+      })()`);
+      assert.equal(located, true, 'The bundled land finder must locate a newly constructed city');
+      console.log('Built a city and located its site from the realm atlas.');
       app.exit(0);
     } catch (error) { fail(error); }
   });

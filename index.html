@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none';" />
-  <meta name="app-version" content="1.1.0" />
+  <meta name="app-version" content="1.2.0" />
   <title>Starting Conquer…</title>
   <link rel="stylesheet" href="src/styles/main.css" />
 </head>
@@ -20,13 +20,13 @@
           <span class="brand-name">CONQUER</span>
         </div>
 
-        <div id="player-chip" class="nation-chip">
+        <button type="button" id="player-chip" class="nation-chip" title="Find my land (L)" aria-haspopup="dialog">
           <span class="flag" id="player-flag"></span>
           <span class="nation-text">
             <b id="player-name">—</b>
-            <i id="player-gov">—</i>
+            <i>Find my land ›</i>
           </span>
-        </div>
+        </button>
 
         <div class="resources">
           <div class="res" title="Treasury / net income per second">
@@ -95,6 +95,7 @@
         <div class="minimap-head">
           <span id="map-mode">WORLD MAP</span>
           <div class="minimap-tools">
+            <button id="btn-home" class="mini-home" title="Go home (F)">Home</button>
             <button id="btn-zoom-out" title="Zoom out">−</button>
             <button id="btn-zoom-in" title="Zoom in">+</button>
             <button id="btn-reset-view" title="Reset view">⤢</button>
@@ -102,7 +103,7 @@
         </div>
         <canvas id="minimap"></canvas>
         <div class="legend">
-          <span><i class="dot you"></i>You</span>
+          <span><i class="dot you"></i>Home flag</span>
           <span><i class="dot enemy"></i>At war</span>
           <span><i class="dot ally"></i>Ally</span>
           <span><i class="dot neutral"></i>Tribes</span>
@@ -115,14 +116,14 @@
 
       <div id="build-bar">
         <div class="bb-slots" id="bb-slots"></div>
-        <div class="bb-hint" id="bb-hint">Pick a structure, then click one of your provinces</div>
+        <div class="bb-hint" id="bb-hint">Pick a structure, then click a tile on your land</div>
       </div>
 
       <div id="hint-bar"></div>
 
       <footer id="app-footer">
         <span class="footer-brand">CONQUER</span>
-        <span id="footer-version">v1.1.0</span>
+        <span id="footer-version">v1.2.0</span>
         <span id="footer-update">checking for updates…</span>
         <button id="footer-update-btn" class="hidden">RESTART TO UPDATE</button>
       </footer>
@@ -192,7 +193,7 @@
     <!-- ============================== MODALS ============================== -->
     <div id="modal-root" class="hidden">
       <div id="modal-backdrop"></div>
-      <div id="modal"></div>
+      <div id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"></div>
     </div>
 
     <div id="loading" class="hidden">

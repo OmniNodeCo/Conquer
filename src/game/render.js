@@ -3,9 +3,10 @@
 // node-canvas for offline previews.
 
 import { PixelAtlas, stamp } from './map-art.js';
-import { TERRAIN, PIXEL } from './worldgen.js';
+import { TERRAIN, PIXEL, cellCenter } from './worldgen.js';
 import { clamp } from './geom.js';
 import { withAlpha } from './color.js';
+import { heldCell, nationSeat } from './fronts.js';
 
 const defaultSurface = (w, h) => {
   if (typeof document !== 'undefined') {
@@ -54,6 +55,7 @@ export class MapView {
 
   setWorld(world) {
     this.world = world;
+    this.locator = null;
     this.attackTarget = this.attackSource = null;
     this.politicalKey = null;
     this.atlas = new PixelAtlas(world, this.surface);
@@ -100,19 +102,40 @@ export class MapView {
 
   clampCamera() {
     if (!this.world) return;
-    const halfW = this.width / (2 * this.camera.zoom);
-    const halfH = this.height / (2 * this.camera.zoom);
-    const pad = 80;
-    this.camera.x = clamp(this.camera.x, Math.min(halfW, this.world.width / 2) - pad, Math.max(this.world.width - halfW, this.world.width / 2) + pad);
-    this.camera.y = clamp(this.camera.y, Math.min(halfH, this.world.height / 2) - pad, Math.max(this.world.height - halfH, this.world.height / 2) + pad);
+    // Keep the centre on the map, but allow coastal parcels to reach the middle
+    // of the viewport instead of getting trapped behind the HUD at the edges.
+    this.camera.x = clamp(this.camera.x, 0, this.world.width);
+    this.camera.y = clamp(this.camera.y, 0, this.world.height);
   }
 
-  focusProvince(prov, zoom = null) {
+  focusProvince(prov, zoom = null, cell = prov?.seatCell) {
     if (!prov) return;
     if (zoom) this.camera.zoom = clamp(zoom, 0.3, 3.2);
-    this.camera.x = prov.centroid[0];
-    this.camera.y = prov.centroid[1];
+    [this.camera.x, this.camera.y] = cellCenter(this.world, cell);
     this.clampCamera();
+  }
+
+  locate(prov, cell) {
+    this.focusProvince(prov, Math.max(1.6, this.camera.zoom), cell);
+    this.locator = { cell, provinceId: prov.id, until: performance.now() / 1000 + 3 };
+  }
+
+  drawLocator(time) {
+    const pin = this.locator;
+    if (!pin || pin.provinceId !== this.selected || time >= pin.until) return;
+    const [sx, sy] = this.worldToScreen(...cellCenter(this.world, pin.cell));
+    const x = Math.round(sx), y = Math.round(sy);
+    const r = Math.ceil(this.world.pixel * 3 * this.camera.zoom) + Math.ceil(Math.max(0, pin.until - time - 2) * 9);
+    // Four atlas corners briefly bracket the destination, even while paused.
+    for (const dx of [-1, 1]) for (const dy of [-1, 1]) {
+      const bx = x + dx * r, by = y + dy * r;
+      this.ctx.fillStyle = '#283339';
+      this.ctx.fillRect(bx - (dx > 0 ? 6 : 1), by-1, 9, 4);
+      this.ctx.fillRect(bx-1, by - (dy > 0 ? 6 : 1), 4, 9);
+      this.ctx.fillStyle = '#ffdc8a';
+      this.ctx.fillRect(bx - (dx > 0 ? 5 : 0), by, 7, 2);
+      this.ctx.fillRect(bx, by - (dy > 0 ? 5 : 0), 2, 7);
+    }
   }
 
   // -------------------------------------------------------------------- draw
@@ -158,6 +181,7 @@ export class MapView {
     // ---------------------------------------------------- screen-space layer
     this.drawOverlay(state, zoom, view, { showLabels, showTroops, playerId });
     this.drawEffects(state, zoom);
+    this.drawLocator(time);
   }
 
   politicalLayer(state, selectedId = null, hoveredId = null) {
@@ -257,19 +281,6 @@ export class MapView {
     ctx.restore();
   }
 
-  nationSeat(state, nation) {
-    const world = this.world;
-    if (!nation || !nation.alive) return null;
-    const cap = world.provinces[nation.capitalId];
-    if (cap && cap.nationId === nation.id) return cap;
-    let best = null;
-    for (const prov of world.provinces) {
-      if (prov.nationId !== nation.id) continue;
-      if (!best || prov.area > best.area) best = prov;
-    }
-    return best;
-  }
-
   drawOverlay(state, zoom, view, { showLabels = true, showTroops = true, playerId = 0 } = {}) {
     const ctx = this.ctx;
     const occupied = [];
@@ -288,6 +299,13 @@ export class MapView {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
+    // Don't cover a placed landmark with a troop counter or a name plate.
+    for (const mark of this.atlas.siteMarks) {
+      if (mark.x + mark.size < view.minX || mark.x > view.maxX || mark.y + mark.size < view.minY || mark.y > view.maxY) continue;
+      const [sx, sy] = this.worldToScreen(mark.x, mark.y);
+      claim(sx, sy, mark.size * zoom, mark.size * zoom);
+    }
+
     // 1. Nation name plates at their capitals (top priority).
     if (showLabels) {
       const order = [...state.nations]
@@ -300,7 +318,7 @@ export class MapView {
           return cb - ca;
         });
       for (const nation of order) {
-        const seat = this.nationSeat(state, nation);
+        const seat = nationSeat(this.world, nation);
         if (!seat) continue;
         if (seat.bbox.maxX < view.minX || seat.bbox.minX > view.maxX || seat.bbox.maxY < view.minY || seat.bbox.minY > view.maxY) {
           continue;
@@ -313,7 +331,8 @@ export class MapView {
         const plateW = textW + 20;
         const plateH = 19;
         const px = sx - plateW / 2;
-        const py = sy - 16 * zoom - plateH;
+        let py = sy - 16 * zoom - plateH;
+        if (!fits(px, py, plateW, plateH)) py -= plateH + 4;
         if (!fits(px, py, plateW, plateH)) continue;
         claim(px, py, plateW, plateH);
 
@@ -355,11 +374,6 @@ export class MapView {
         ctx.fillStyle = '#eaf1f7';
         ctx.font = '13px "VT323", "Pixelify Sans", monospace';
         ctx.fillText(label, sx, by + h / 2 + 0.5);
-        if (prov.buildings && prov.buildings.silo > 0) {
-          ctx.fillStyle = '#ffcf5c';
-          ctx.font = '11px system-ui';
-          ctx.fillText('☢', sx + w / 2 + 8, by + h / 2);
-        }
       }
     }
 
@@ -463,6 +477,16 @@ export class MapView {
     ctx.strokeStyle = 'rgba(255, 231, 160, 0.9)';
     ctx.lineWidth = 1.4;
     ctx.strokeRect(cx, cy, cw, ch);
+
+    const home = nationSeat(world, state.nations[state.playerNationId]);
+    const cell = home && heldCell(home, state.playerNationId);
+    if (cell != null) {
+      const [wx, wy] = cellCenter(world, cell), x = Math.round(wx*sx), y = Math.round(wy*sy);
+      ctx.fillStyle = '#18222a';
+      ctx.fillRect(x-1, y-7, 3, 9); ctx.fillRect(x+1, y-7, 6, 5);
+      ctx.fillStyle = '#ffdc8a';
+      ctx.fillRect(x, y-6, 1, 7); ctx.fillRect(x+1, y-6, 5, 3);
+    }
   }
 }
 

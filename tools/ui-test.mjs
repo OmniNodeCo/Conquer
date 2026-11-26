@@ -6,6 +6,8 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
 // Only used as a predicate in the harness; the game itself runs inside jsdom.
 const { canAttack, update } = await import('../src/game/state.js');
+const { cellCenter } = await import('../src/game/worldgen.js');
+const { tileOwner, heldCell, nationSeat } = await import('../src/game/fronts.js');
 
 const errors = [];
 const logs = [];
@@ -158,6 +160,31 @@ assert(app.state.provinces.length > 100, `provinces generated (${app.state.provi
 assert(document.querySelectorAll('#rank-list li').length > 0, 'rank list populated');
 assert(document.getElementById('inspector').innerHTML.length > 200, 'inspector populated');
 
+// --- realm atlas: discoverable HUD, real search and no leaking game keys ----
+const chip = document.getElementById('player-chip');
+const keydown = key => document.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+const searchAtlas = text => {
+  const box = document.getElementById('atlas-query');
+  box.value = text; box.dispatchEvent(new window.Event('input', { bubbles: true }));
+};
+assert(chip.textContent.includes(chosen.nation.name) && chip.textContent.includes('Find my land'), 'flag button identifies the player and the land finder');
+chip.click();
+assert(app.state.paused && document.activeElement.id === 'atlas-query', 'finder pauses a running campaign and focuses search');
+const owned = app.state.provinces.filter(p => p.nationId === app.state.playerNationId);
+assert(owned.every(p => document.querySelector(`.atlas-place[data-find-province="${p.id}"]`)), 'every own province can be located');
+searchAtlas('no-such-map-name');
+assert(!document.querySelector('.atlas-place') && !!document.querySelector('.atlas-empty'), 'unmatched search explains empty results');
+keydown('2'); keydown(' ');
+assert(!app.buildMode && app.state.paused, 'typing shortcuts cannot arm buildings or unpause behind the finder');
+keydown('Escape');
+assert(!app.state.paused && document.getElementById('modal-root').classList.contains('hidden'), 'Escape in search closes finder and restores running clock');
+keydown('L');
+searchAtlas(owned[0].name.toUpperCase());
+const result = document.querySelector(`.atlas-place[data-find-province="${owned[0].id}"]`);
+assert(!!result, 'province search is case insensitive');
+result.click();
+assert(app.state.selectedProvinceId === owned[0].id && app.view.locator.cell === heldCell(owned[0], app.state.playerNationId), 'a province result locates land and opens its inspector');
+
 // --- simulation -----------------------------------------------------------
 app.handlers.setSpeed(3);
 await wait(2500);
@@ -186,6 +213,7 @@ if (buildBtn) {
   buildBtn.click();
   await wait(200);
   assert(capital.troops >= garrisonBefore, 'garrison intact after build');
+  assert(capital.sites.some(s => s.key === buildBtn.dataset.key), 'inspector construction also leaves a physical site');
   assert(document.getElementById('inspector').innerHTML.includes('CONSTRUCTION'), 'inspector rebuilt after build');
 }
 
@@ -272,6 +300,16 @@ const foothold = neighbour.fronts.get(player.id);
 assert(foothold?.tiles.size > 0 && foothold.tiles.size < neighbour.areaPx, 'one push takes a patch, not the province');
 assert(document.querySelector('.front-caption')?.textContent.includes('Your control'), 'inspector reports occupied ground');
 assert(document.querySelector('#battle-report')?.textContent.includes('tiles'), 'battle report gives the actual tile gain');
+// A foothold is not a fully owned province. Following it must NOT take the
+// one-click assault route, even though the neighbouring land is attackable.
+const ordersBefore = [player.gold, player.stats.troopsLost, app.state.expeditions.length, app.state.landRevision].join();
+chip.click();
+searchAtlas(neighbour.name);
+const frontRow = document.querySelector(`.atlas-place[data-find-province="${neighbour.id}"]`);
+assert(frontRow?.textContent.includes('Foothold'), 'partial holdings are identified as footholds');
+frontRow.click();
+assert(app.state.paused && foothold.tiles.has(app.view.locator.cell), 'jump lands on a held front parcel and preserves manual pause');
+assert(ordersBefore === [player.gold, player.stats.troopsLost, app.state.expeditions.length, app.state.landRevision].join(), 'finding foreign-administered land issues no orders');
 const oldCamera = { ...app.view.camera };
 app.view.focusProvince(neighbour, 2);
 app.view.draw(app.state, { time: 1, showLabels: false, showTroops: false });
@@ -296,7 +334,7 @@ if (other) {
 app.state.paused = true;
 player.gold = 5000;
 const ownProv = app.state.provinces.find((p) => p.nationId === player.id);
-ownProv.buildings.silo = 1;
+app.handlers.build(ownProv.id, 'silo');
 app.handlers.selectProvince(ownProv.id);
 await wait(300);
 assert(document.getElementById('inspector').innerHTML.includes('STRATEGIC FORCES'), 'silo unlocks strategic panel');
@@ -348,6 +386,7 @@ app.handlers.load();
 await wait(1800);
 assert(!!app.state && app.state.day === savedDay, `load restores campaign (day ${app.state.day} vs ${savedDay})`);
 assert(app.screen === 'game', 'still in game after load');
+assert(JSON.stringify(app.state.provinces[ownProv.id].sites) === JSON.stringify(ownProv.sites), 'Continue restores site levels and their exact tiles');
 
 // --- build hotbar ---------------------------------------------------------
 // The save/load check above replaced app.state, so re-bind the livePlayer.
@@ -365,11 +404,38 @@ livePlayer.gold = 900;
 castleSlot.click();
 assert(app.buildMode === 'fort', 'clicking a slot arms placement mode');
 assert(document.getElementById('bb-hint').classList.contains('placing'), 'hotbar shows placement state');
-app.handlers.clickProvince(ownForBuild.id);
+const buildCell = ownForBuild.cells.find(i => i !== ownForBuild.seatCell && tileOwner(ownForBuild, i) === livePlayer.id &&
+  !app.view.atlas.siteAtPoint(ownForBuild, ...cellCenter(app.world, i)) && !ownForBuild.sites.some(s => s.cell === i));
+const buildXY = cellCenter(app.world, buildCell);
+app.view.focusProvince(ownForBuild, 1.8, buildCell);
+const clickXY = app.view.worldToScreen(...buildXY);
+app.handleMapClick(...clickXY);
 await wait(120);
-assert(ownForBuild.buildings.fort === 1, 'clicking a province places the castle');
+const castle = ownForBuild.sites.find(s => s.key === 'fort');
+assert(castle?.cell === buildCell && ownForBuild.buildings.fort === 1, 'hotbar click puts a castle on the exact off-centre map tile');
+app.updateHover(...clickXY);
+assert(document.getElementById('tooltip').textContent.includes('Castle · Lv 1'), 'hover identifies the map building without the inspector');
 assert(livePlayer.gold < 900, 'placing a castle costs gold');
 assert(app.buildMode === 'fort', 'placement stays armed for rapid building');
+app.handleMapClick(...clickXY);
+assert(castle.level === 2 && ownForBuild.sites.filter(s => s.key === 'fort').length === 1, 'rebuilding at the same spot upgrades the existing landmark');
+const afterBuild = livePlayer.gold;
+app.view.fitWorld();
+chip.click(); searchAtlas('cAsTlE');
+const landmark = document.querySelector(`.atlas-sites button[data-find-province="${ownForBuild.id}"][data-cell="${buildCell}"]`);
+assert(landmark?.textContent.includes('Lv 2'), 'buildings are searchable by name and list their level');
+landmark.click();
+assert(app.view.camera.x === buildXY[0] && app.view.camera.y === buildXY[1] && livePlayer.gold === afterBuild && castle.level === 2,
+  'a building result centres its exact site without issuing another construction order');
+// F, the finder and the minimap must agree after a change of capital.
+const liveCapital = app.state.provinces[livePlayer.capitalId];
+liveCapital.nationId = app.state.nations.find(n => n.id !== livePlayer.id).id;
+const standIn = nationSeat(app.world, livePlayer);
+chip.click(); document.getElementById('atlas-home').click();
+assert(app.state.selectedProvinceId === standIn.id && app.view.locator.cell === heldCell(standIn, livePlayer.id), 'Go home finds remaining land when the capital is lost');
+liveCapital.nationId = livePlayer.id;
+document.getElementById('btn-home').click();
+assert(app.state.selectedProvinceId === liveCapital.id, 'minimap Home follows the restored capital');
 app.cancelBuildMode();
 assert(app.buildMode === null, 'escape/cancel leaves placement mode');
 
