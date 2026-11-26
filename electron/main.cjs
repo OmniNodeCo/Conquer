@@ -73,8 +73,12 @@ function createWindow() {
   if (isDev && process.env.CONQUER_DEVTOOLS === '1') {
     mainWindow.webContents.once('did-finish-load', () => mainWindow.webContents.openDevTools({ mode: 'detach' }));
   }
+  // Closing during navigation may reject loadURL with ERR_FAILED as well as
+  // ERR_ABORTED. Never put up a blocking startup dialog on an intentional exit.
+  let closing = false;
+  mainWindow.once('close', () => { closing = true; });
   mainWindow.loadURL(`${APP_ORIGIN}/index.html`).catch((error) => {
-    if (error.code !== 'ERR_ABORTED') reportStartupError(error);
+    if (!closing && error.code !== 'ERR_ABORTED') reportStartupError(error);
   });
 
   mainWindow.on('closed', () => {

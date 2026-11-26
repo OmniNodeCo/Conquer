@@ -10,6 +10,10 @@ const bundle = path.resolve(process.argv.at(-1));
 app.setPath('userData', mkdtempSync(path.join(tmpdir(), 'conquer-smoke-')));
 function fail(error) {
   console.error(error);
+  if (process.env.GITHUB_ACTIONS) {
+    const msg = String(error).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+    console.error(`::error title=Offline campaign startup::${msg}`);
+  }
   app.exit(1);
 }
 setTimeout(() => fail('Timed out waiting for the desktop game'), 45000);

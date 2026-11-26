@@ -117,6 +117,7 @@ jobs:
           npx electron-builder ${{ matrix.target }} --publish never
 
       - name: Verify Windows launchers use the GUI subsystem (not a console)
+        id: windows_gui
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -132,12 +133,6 @@ jobs:
             } finally { $pe.Dispose() }
           }
 
-      - name: Launch the actual Windows portable executable
-        if: runner.os == 'Windows'
-        timeout-minutes: 3
-        shell: pwsh
-        run: ./tools/smoke-windows-portable.ps1
-
       - name: Start a campaign from the packaged game offline
         timeout-minutes: 2
         if: runner.os == 'Linux' || runner.os == 'Windows'
@@ -148,6 +143,12 @@ jobs:
           else
             xvfb-run -a node_modules/.bin/electron --no-sandbox tools/desktop-smoke.cjs release/linux-unpacked/resources/app.asar
           fi
+
+      - name: Launch the actual Windows portable executable
+        if: ${{ !cancelled() && steps.windows_gui.outcome == 'success' }}
+        timeout-minutes: 4
+        shell: pwsh
+        run: ./tools/smoke-windows-portable.ps1
 
       - name: Verify the Windows signature
         if: runner.os == 'Windows' && env.SIGN_BUILD == 'true'

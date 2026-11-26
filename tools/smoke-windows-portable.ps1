@@ -22,9 +22,16 @@ try {
   } while ([DateTime]::UtcNow -lt $deadline)
   if ($lastTitle -cne 'Conquer: Rule the Globe') { throw "Portable did not reach the title screen in 90 seconds. Last window: $lastTitle" }
   Write-Host "$($exe.Name) opened its title screen on Windows."
-  if (-not $game.CloseMainWindow() -or -not $launcher.WaitForExit(20000) -or $launcher.ExitCode -ne 0) {
-    throw 'The portable did not close cleanly after closing the game window.'
+  $null = $game.Handle # Retain the inner process handle across WM_CLOSE.
+  if (-not $game.CloseMainWindow()) { throw 'Windows could not request a close on the game window.' }
+  if (-not $game.WaitForExit(30000)) {
+    $game.Refresh()
+    throw "Game process did not exit after WM_CLOSE. Window: '$($game.MainWindowTitle)'; responding: $($game.Responding)."
   }
+  # The self-extractor still has to remove the Electron runtime from TEMP after
+  # the game exits. Time it separately from the native window's shutdown.
+  if (-not $launcher.WaitForExit(60000)) { throw 'The game exited but portable cleanup did not finish within 60 seconds.' }
+  if ($launcher.ExitCode -ne 0) { throw "Portable returned exit $($launcher.ExitCode) after closing the game." }
 } catch {
   Write-Host "::error title=Windows portable startup::$($_.Exception.Message)"
   throw
