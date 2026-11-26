@@ -160,10 +160,11 @@ to update. Both editions keep saves in the app's user-data directory.
 
 [Build](.github/workflows/build.yml) tests pushes, pull requests and manual
 runs. After tests pass on a push or manual run, it packages the three desktop
-platforms. The Windows job checks the GUI subsystem, then starts the actual
-portable `.exe` with its default profile, selects **New Campaign** in its window,
-and verifies that nation selection opens and the app closes cleanly. The Linux smoke test loads the packaged `app.asar` in a real
-Electron window with network requests blocked and checks the title screen.
+platforms. The Windows job starts the actual portable `.exe` without flags or a
+profile override. It waits for a native window with the title the renderer sets
+**after** the title screen initializes, then closes it and checks for a clean exit.
+On Windows and Linux, a second test loads the packaged `app.asar` in Electron
+with networking blocked and starts a campaign using the on-screen buttons.
 Desktop artifacts are kept for 30 days. UI screenshots are diagnostic only.
 
 [Release](.github/workflows/release.yml) publishes **those artifacts**, without

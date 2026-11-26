@@ -25,7 +25,26 @@ app.once('browser-window-created', (_event, win) => {
       assert.equal(win.webContents.getURL(), 'app://conquer/index.html');
       const state = await win.webContents.executeJavaScript('({ desktop: window.desktop?.isDesktop, screen: window.__app?.screen })');
       assert.deepEqual(state, { desktop: true, screen: 'title' });
-      console.log('Packaged game opened its title screen in an offline Electron window.');
+      // Drive the bundled UI, not an external browser or a test-only app API.
+      // Map generation is asynchronous; wait for the actual screen transition.
+      const choices = await win.webContents.executeJavaScript(`new Promise(resolve => {
+        const nations = document.getElementById('screen-nations');
+        const observer = new MutationObserver(() => {
+          if (nations.classList.contains('hidden')) return;
+          observer.disconnect();
+          resolve(nations.querySelectorAll('.nation-card').length);
+        });
+        observer.observe(nations, { attributes: true, attributeFilter: ['class'] });
+        document.getElementById('btn-new').click();
+      })`);
+      assert.ok(choices > 1, 'New Campaign must offer a choice of nations');
+      const started = await win.webContents.executeJavaScript(`
+        document.getElementById('btn-start').click();
+        window.__app.screen === 'game' && window.__app.state?.started === true &&
+          !document.getElementById('hud').classList.contains('hidden')
+      `);
+      assert.equal(started, true, 'Begin Campaign must open the playable map');
+      console.log('Packaged game opened its title screen and started a campaign offline.');
       app.exit(0);
     } catch (error) { fail(error); }
   });

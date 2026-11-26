@@ -990,4 +990,5 @@ class App {
 
 window.addEventListener('DOMContentLoaded', () => {
   window.__app = new App();
+  document.title = 'Conquer: Rule the Globe';
 });

@@ -135,13 +135,19 @@ jobs:
       - name: Launch the actual Windows portable executable
         if: runner.os == 'Windows'
         timeout-minutes: 3
-        shell: powershell
+        shell: pwsh
         run: ./tools/smoke-windows-portable.ps1
 
-      - name: Smoke-test the packaged game in a desktop window
+      - name: Start a campaign from the packaged game offline
         timeout-minutes: 2
-        if: runner.os == 'Linux'
-        run: xvfb-run -a node_modules/.bin/electron --no-sandbox tools/desktop-smoke.cjs release/linux-unpacked/resources/app.asar
+        if: runner.os == 'Linux' || runner.os == 'Windows'
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == 'Windows' ]]; then
+            node_modules/.bin/electron tools/desktop-smoke.cjs release/win-unpacked/resources/app.asar
+          else
+            xvfb-run -a node_modules/.bin/electron --no-sandbox tools/desktop-smoke.cjs release/linux-unpacked/resources/app.asar
+          fi
 
       - name: Verify the Windows signature
         if: runner.os == 'Windows' && env.SIGN_BUILD == 'true'

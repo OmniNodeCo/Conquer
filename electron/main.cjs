@@ -53,7 +53,8 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 680,
     backgroundColor: '#050c13',
-    title: GAME_TITLE,
+    // The renderer replaces this with the game title after the title screen boots.
+    title: 'Starting Conquer…',
     icon: path.join(APP_ROOT, 'assets', 'icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
