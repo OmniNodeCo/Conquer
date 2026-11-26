@@ -66,9 +66,7 @@ class App {
 
   // ------------------------------------------------------- version / updater
   initFooter() {
-    const meta = document.querySelector('meta[name="app-version"]');
-    const fallback = meta?.content || '1.0.0';
-    this.ui.setVersion(fallback);
+    this.ui.setVersion(document.querySelector('meta[name="app-version"]')?.content);
     if (!window.desktop?.onUpdateStatus) {
       this.ui.setUpdateStatus({ state: 'unsupported' });
       return;

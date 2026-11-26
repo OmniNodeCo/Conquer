@@ -26,6 +26,11 @@ window, not a terminal or your web browser. There is no local web server, port
 or URL to open, and no need to install Node.js. If you have the old browser-based
 portable, download the new **Conquer-Portable** instead.
 
+If the Windows **1.0.0** portable closes without a window, use **1.0.1** or
+later. In File Explorer, choose **Extract All** on the download and open
+**Conquer-Portable** from the extracted folder. The portable unpacks Electron
+before the window appears; launch it once and leave your saved data in place.
+
 ## Highlights
 
 - **Procedural earth-like world** — value-noise terrain, marching-squares coastlines,
@@ -155,9 +160,10 @@ to update. Both editions keep saves in the app's user-data directory.
 
 [Build](.github/workflows/build.yml) tests pushes, pull requests and manual
 runs. After tests pass on a push or manual run, it packages the three desktop
-platforms. The Windows job checks the PE GUI subsystem of both `.exe` files
-and the inner game. The Linux smoke test loads the packaged `app.asar` in a
-real Electron window with network requests blocked and checks the title screen.
+platforms. The Windows job checks the GUI subsystem, then starts the actual
+portable `.exe` with its default profile, selects **New Campaign** in its window,
+and verifies that nation selection opens and the app closes cleanly. The Linux smoke test loads the packaged `app.asar` in a real
+Electron window with network requests blocked and checks the title screen.
 Desktop artifacts are kept for 30 days. UI screenshots are diagnostic only.
 
 [Release](.github/workflows/release.yml) publishes **those artifacts**, without

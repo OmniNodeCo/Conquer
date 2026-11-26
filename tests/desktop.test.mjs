@@ -25,6 +25,13 @@ test('package metadata points at a real Electron entry point', () => {
   assert.equal(pkg.build.productName, 'Conquer Rule the Globe');
 });
 
+test('Electron can use its runtime product name as a Windows profile folder', () => {
+  // Electron reads the root package.json, not electron-builder's build.productName,
+  // before it creates userData and takes the single-instance lock.
+  assert.doesNotMatch(pkg.productName, /[<>:"/\\|?*]|[. ]$/);
+  assert.equal(pkg.productName, pkg.build.productName);
+});
+
 test('electron entry points parse and stay sandboxed', () => {
   for (const file of ['electron/main.cjs', 'electron/preload.cjs', 'electron/serve.cjs']) {
     execFileSync(process.execPath, ['--check', path.join(ROOT, file)], { stdio: 'pipe' });

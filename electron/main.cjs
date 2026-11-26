@@ -4,6 +4,11 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const { APP_HOST, readAppFile } = require('./serve.cjs');
 
+const GAME_TITLE = 'Conquer: Rule the Globe';
+// Windows must get the colon-free productName from package.json *before* the
+// first profile/lock lookup. Keep the original profile (and saves) on Unix.
+if (process.platform !== 'win32') app.setName(GAME_TITLE);
+
 const isDev = !app.isPackaged;
 let mainWindow = null;
 
@@ -48,8 +53,7 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 680,
     backgroundColor: '#050c13',
-    show: false,
-    title: 'Conquer: Rule the Globe',
+    title: GAME_TITLE,
     icon: path.join(APP_ROOT, 'assets', 'icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
@@ -65,16 +69,11 @@ function createWindow() {
   // This is a single-window game, not a browser. Never hand a URL to the OS.
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
-  mainWindow.loadURL(`${APP_ORIGIN}/index.html`).catch(() => {
-    dialog.showErrorBox('Conquer could not open', 'The game files could not be loaded. Please reinstall Conquer.');
-    app.quit();
-  });
-
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-    if (isDev && process.env.CONQUER_DEVTOOLS === '1') {
-      mainWindow.webContents.openDevTools({ mode: 'detach' });
-    }
+  if (isDev && process.env.CONQUER_DEVTOOLS === '1') {
+    mainWindow.webContents.once('did-finish-load', () => mainWindow.webContents.openDevTools({ mode: 'detach' }));
+  }
+  mainWindow.loadURL(`${APP_ORIGIN}/index.html`).catch((error) => {
+    if (error.code !== 'ERR_ABORTED') reportStartupError(error);
   });
 
   mainWindow.on('closed', () => {
@@ -171,32 +170,44 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  app.quit();
-} else {
+function reportStartupError(error) {
+  dialog.showErrorBox('Conquer could not open', error.message || String(error));
+  app.exit(1);
+}
+
+async function start() {
+  // Validate the profile first: Electron can return false for an invalid lock
+  // directory as well as for a legitimate second instance.
+  try {
+    app.getPath('userData');
+  } catch (error) {
+    throw new Error(`Conquer could not open its profile folder. Check that your account can write to its application data folder.\n\n${error.message}`);
+  }
+  if (!app.requestSingleInstanceLock()) {
+    app.quit();
+    return;
+  }
   app.on('second-instance', () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
       mainWindow.focus();
     }
   });
-
-  app.whenReady().then(() => {
-    protocol.handle(APP_SCHEME, ({ url }) => readAppFile(url, APP_ROOT));
-    buildMenu();
-    setupAutoUpdater();
-    createWindow();
-
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
-    });
+  await app.whenReady();
+  protocol.handle(APP_SCHEME, ({ url }) => readAppFile(url, APP_ROOT));
+  buildMenu();
+  setupAutoUpdater();
+  createWindow();
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });
 }
+
+start().catch(reportStartupError);
 
 // --------------------------------------------------------------------- IPC
 ipcMain.handle('game:save', async (_event, json) => {

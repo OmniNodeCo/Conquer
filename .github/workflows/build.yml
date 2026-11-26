@@ -135,7 +135,7 @@ jobs:
       - name: Launch the actual Windows portable executable
         if: runner.os == 'Windows'
         timeout-minutes: 3
-        shell: pwsh
+        shell: powershell
         run: ./tools/smoke-windows-portable.ps1
 
       - name: Smoke-test the packaged game in a desktop window
