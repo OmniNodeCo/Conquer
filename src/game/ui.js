@@ -4,6 +4,7 @@ import { icon } from './icons.js';
 import { flagFor } from './flags.js';
 import { TERRAIN } from './worldgen.js';
 import { formatTroops } from './render.js';
+import { heldTiles, sectorGuard } from './fronts.js';
 import {
   BUILDINGS,
   TUNING,
@@ -15,6 +16,7 @@ import {
   canRecruit,
   defenseMultiplier,
   hasSilo,
+  garrisonTarget,
   nationArmy,
   nationIncome,
   nationManpowerRegen,
@@ -120,6 +122,7 @@ export class UI {
       manpower: document.getElementById('stat-manpower'),
       regen: document.getElementById('stat-regen'),
       army: document.getElementById('stat-army'),
+      replacements: document.getElementById('stat-replacements'),
       prov: document.getElementById('stat-prov'),
       share: document.getElementById('stat-share'),
       clockDate: document.getElementById('clock-date'),
@@ -321,16 +324,14 @@ export class UI {
     }
     const lost = Math.round(result.attackerLosses * 1000).toLocaleString();
     const killed = Math.round(result.defenderLosses * 1000).toLocaleString();
-    node.className = result.win ? 'show win' : 'show loss';
+    node.className = result.win || result.captured ? 'show win' : 'show loss';
     node.innerHTML = `
-      <div class="br-head">${result.win ? 'VICTORY' : 'DEFEAT'}</div>
-      <div class="br-sub">${result.win ? 'Assault on' : 'Repulsed at'} ${prov.name}</div>
+      <div class="br-head">${result.captured ? 'PROVINCE SECURED' : result.win ? 'FRONT ADVANCED' : 'COSTLY GROUND'}</div>
+      <div class="br-sub">${prov.name} · +${result.gained} tiles</div>
       <div class="br-rows">
         <div class="br-row minus"><span>Soldiers lost</span><b>−${lost}</b></div>
-        <div class="br-row"><span>Enemy dead</span><b>${killed}</b></div>
-        <div class="br-row"><span>${result.win ? 'Province' : 'Survivors'}</span><b>${
-          result.win ? 'captured' : 'fell back'
-        }</b></div>
+        <div class="br-row"><span>Defender losses</span><b>${killed}</b></div>
+        <div class="br-row"><span>Ground held</span><b>${pct(result.held / prov.areaPx)}</b></div>
       </div>`;
     clearTimeout(this._brTimer);
     this._brTimer = setTimeout(() => {
@@ -377,8 +378,11 @@ export class UI {
     this.el.income.textContent = `${income >= 0 ? '+' : ''}${income.toFixed(1)}/s`;
     this.el.income.className = income >= 0 ? 'pos' : 'neg';
     this.el.manpower.textContent = fmtInt(player.manpower);
-    this.el.regen.textContent = `+${regen.toFixed(1)}/s`;
+    const netReserve = regen - (player.replacementRate || 0);
+    this.el.regen.textContent = `${netReserve >= 0 ? '+' : ''}${netReserve.toFixed(1)}/s`;
     this.el.army.textContent = formatTroops(nationArmy(state, state.playerNationId));
+    this.el.replacements.textContent = !state.paused && player.replacementRate > 0
+      ? `+${formatTroops(player.replacementRate)}/s mustering` : 'standing army';
     this.el.prov.textContent = own;
     this.el.share.textContent = `${pct(worldShare(state), 1)} of globe`;
     this.el.clockDate.textContent = dateLabel(state.day);
@@ -540,12 +544,12 @@ export class UI {
     } else if (this.inspectorMode === 'province' && this.inspectorId !== null) {
       const prov = state.provinces[this.inspectorId];
       if (prov && prov.nationId === state.playerNationId) {
-        html = `<span>Borders highlighted — click a neighbouring province to plan an attack</span><span class="key">Space</span> pause`;
+        html = `<span>Click beyond the border to take ground. Tap an enemy foothold at home to reclaim it.</span><span class="key">Space</span> pause`;
       } else if (prov) {
         html = `<span>Choose a source army above, set the commitment, then <b>ATTACK</b></span>`;
       }
     } else {
-      html = `<span>Click a province to inspect it · drag to pan · scroll to zoom</span><span class="key">Space</span> pause / resume`;
+      html = `<span>Click your land to inspect · click foreign land to advance · drag to pan</span><span class="key">Space</span> pause / resume`;
     }
     this.el.hint.innerHTML = html;
   }
@@ -581,7 +585,8 @@ export class UI {
       this.el.inspector.classList.add('hidden');
       return;
     }
-    const key = `${this.inspectorMode}:${this.inspectorId}`;
+    const p = this.inspectorMode === 'province' && state.provinces[this.inspectorId];
+    const key = `${this.inspectorMode}:${this.inspectorId}:${p?.nationId}:${p?.frontRevision || 0}`;
     if (key !== this.inspectorKey || this.dirtyInspector) {
       this.inspectorKey = key;
       this.dirtyInspector = false;
@@ -592,6 +597,7 @@ export class UI {
   }
 
   renderInspector(state) {
+    this.h.clearPreview();
     const el = this.el.inspector;
     el.classList.remove('hidden');
     if (this.inspectorMode === 'nation') {
@@ -620,6 +626,10 @@ export class UI {
         <button class="insp-close" data-action="close-inspector" title="Close">✕</button>
       </div>
       <div class="insp-owner">${ownerFlag}<span>${ownerName}</span></div>
+      ${prov.fronts.size ? `<div class="front-strip" title="Land held by each power">
+        <i style="width:${pct(heldTiles(prov, prov.nationId)/prov.areaPx, 2)};background:${nation?.color || '#88977a'}"></i>
+        ${[...prov.fronts].map(([id, f]) => `<i style="width:${pct(f.tiles.size/prov.areaPx, 2)};background:${state.nations[id].color}"></i>`).join('')}
+      </div><div class="front-caption">Your control <b>${pct(heldTiles(prov,state.playerNationId)/prov.areaPx)}</b> · ${prov.nationId === state.playerNationId ? 'Tap occupied ground to reclaim it' : 'Survivors hold the line'}</div>` : ''}
     </div>`;
   }
 
@@ -701,6 +711,7 @@ export class UI {
         <div>
           <div class="insp-section-title">RECRUIT <span>${fmtInt(nation.manpower)} manpower</span></div>
           <div class="recruit-row">${recruitRows}</div>
+          <div class="muster-note">After ${TUNING.musterDelay}s of rest, reserves refill this garrison to ${formatTroops(garrisonTarget(prov))}. Recruit to go higher.</div>
         </div>
         <div>
           <div class="insp-section-title">CONSTRUCTION <span>${fmtGold(nation.gold)} gold</span></div>
@@ -744,7 +755,7 @@ export class UI {
         .join('');
       const first = sources[0];
       const send = Math.max(1, Math.floor(first.prov.troops * 0.8));
-      const { prob, expectedLoss } = battleForecast(send, prov.troops, def);
+      const { prob, expectedLoss } = battleForecast(send, sectorGuard(prov), def * (first.naval ? 0.92 : 1));
       const odds = oddsLabel(prob);
       attackBody = `
         <div class="attack-box">
@@ -754,7 +765,7 @@ export class UI {
             <input type="range" id="attack-slider" min="10" max="100" value="80" />
             <span class="slider-value" id="attack-troops">${formatTroops(send)}</span>
           </div>
-          <div class="odds ${odds.cls}" id="attack-odds">${odds.text} · ${Math.round(prob * 100)}% chance</div>
+          <div class="odds ${odds.cls}" id="attack-odds">${odds.text} · ${Math.round(prob * 100)}% breakthrough</div>
           <div class="casualty-note" id="attack-losses">≈ ${formatTroops(expectedLoss)} soldiers expected to fall</div>
           <button class="btn danger wide" data-action="attack" data-target="${prov.id}">
             ${icon('sword')} ${first.naval ? 'LAUNCH INVASION' : 'ATTACK'} ${first.naval ? `· ${TUNING.navalCost}g` : ''}
@@ -877,10 +888,10 @@ export class UI {
     if (!select || !slider) return;
     const option = select.selectedOptions[0];
     if (!option) return;
-    const available = Number(option.dataset.troops);
+    const available = state.provinces[Number(select.value)].troops;
     const share = Number(slider.value) / 100;
     const troops = Math.max(0.5, available * share);
-    const { prob, expectedLoss } = battleForecast(troops, prov.troops, defenseMultiplier(prov));
+    const { prob, expectedLoss } = battleForecast(troops, sectorGuard(prov), defenseMultiplier(prov) * (option.dataset.naval === 'true' ? 0.92 : 1));
     const label = oddsLabel(prob);
     slider.style.setProperty('--fill', `${slider.value}%`);
     const troopsEl = document.getElementById('attack-troops');
@@ -888,7 +899,7 @@ export class UI {
     const oddsEl = document.getElementById('attack-odds');
     if (oddsEl) {
       oddsEl.className = `odds ${label.cls}`;
-      oddsEl.textContent = `${label.text} · ${Math.round(prob * 100)}% chance`;
+      oddsEl.textContent = `${label.text} · ${Math.round(prob * 100)}% breakthrough`;
     }
     const lossEl = document.getElementById('attack-losses');
     if (lossEl) {
@@ -985,7 +996,7 @@ export class UI {
       kicker: 'FIELD MANUAL',
       title: 'How to play',
       wide: true,
-      sub: 'Conquer 80% of the world\'s provinces to win. Everything else is a means to that end.',
+      sub: 'Hold 80% of the land tiles to win. Even a narrow foothold counts.',
       actions: [{ label: 'UNDERSTOOD', kind: 'primary', onClick: () => this.closeModal() }],
       body: `
         <div class="help-grid">
@@ -994,25 +1005,25 @@ export class UI {
             <ul>
               <li>Time runs at one steady pace. Hit <b>Space</b> to pause and resume.</li>
               <li>Click any province to inspect it. Your provinces show recruitment and construction.</li>
-              <li>Click a neighbouring province to plan an attack from one of your border armies.</li>
-              <li>Unclaimed land (tribes) is cheaper to take than a defended nation.</li>
+              <li>Tap foreign land to send a quarter of a border army. Each push takes a patch of ground.</li>
+              <li>Tap enemy-coloured ground inside your own province to push them back.</li>
             </ul>
           </div>
           <div class="help-card">
             <h4>Economy</h4>
             <ul>
               <li><b>Gold</b> flows from provinces every second. Cities and ports raise it.</li>
-              <li><b>Manpower</b> regrows from population — cities improve that too.</li>
+              <li><b>Manpower</b> refills from population. After 3s of rest, reserves automatically join depleted garrisons.</li>
               <li>Armies cost upkeep every second. Bankrupt armies still fight, but you cannot recruit.</li>
             </ul>
           </div>
           <div class="help-card">
             <h4>War</h4>
             <ul>
-              <li>Attack strength versus garrison strength decides a battle, with a little luck.</li>
+              <li>Each assault fights one sector. A breakthrough takes a wider patch; even a costly push keeps a foothold.</li>
               <li>Terrain and forts multiply the defender. Mountains and cities are costly.</li>
               <li>Ports unlock naval invasions — send troops across water to any coastal province within reach.</li>
-              <li>Captured provinces keep their buildings. Your enemies' cities become yours.</li>
+              <li>When the last defending tile falls, the largest occupier takes the province and its buildings.</li>
             </ul>
           </div>
           <div class="help-card">
@@ -1026,7 +1037,6 @@ export class UI {
           <div class="help-card" style="grid-column: span 2">
             <h4>Controls</h4>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px">
-              <div class="kbd-row"><span>Pause / resume</span><kbd>Space</kbd></div>
               <div class="kbd-row"><span>Pause / resume</span><kbd>Space</kbd></div>
               <div class="kbd-row"><span>Pan map</span><kbd>drag</kbd> / <kbd>arrows</kbd></div>
               <div class="kbd-row"><span>Zoom</span><kbd>scroll</kbd> / <kbd>+</kbd> <kbd>−</kbd></div>

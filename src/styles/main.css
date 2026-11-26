@@ -54,15 +54,6 @@ html, body {
   cursor: crosshair;
 }
 
-#map-fx {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(ellipse at 50% 45%, rgba(0, 0, 0, 0) 45%, rgba(2, 7, 12, 0.55) 100%);
-  mix-blend-mode: multiply;
-}
-
 .hidden { display: none !important; }
 
 button {
@@ -1179,16 +1170,6 @@ select.source-select, select {
 }
 .modal-title { font-family: var(--display); font-size: 13px; letter-spacing: 0.08em; }
 
-/* --------------------------------------------------------------- map fx */
-#map-fx {
-  background:
-    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.16) 0 1px, rgba(0, 0, 0, 0) 1px 3px),
-    radial-gradient(ellipse at 50% 45%, rgba(0, 0, 0, 0) 55%, rgba(2, 7, 12, 0.5) 100%);
-  mix-blend-mode: multiply;
-  opacity: 0.85;
-  image-rendering: pixelated;
-}
-
 /* ------------------------------------------------------------ title art */
 .title-bg { image-rendering: pixelated; }
 .title-bg, .title-art { filter: saturate(1.05) contrast(1.02); }
@@ -1328,3 +1309,10 @@ option,
   color: #0b1219;
 }
 #footer-update-btn:hover { background: var(--gold-bright); }
+
+/* Field notes sit with the army, not in the notification queue. */
+.front-strip { display: flex; height: 6px; margin: 9px 0 4px; background: #17292b; }
+.front-strip i { height: 100%; }
+.front-caption, .muster-note { color: var(--muted); font-size: 12px; line-height: 1.35; }
+.front-caption b { color: #f4d789; }
+.muster-note { margin-top: 6px; }

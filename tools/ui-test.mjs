@@ -5,7 +5,7 @@ import { createCanvas } from '@napi-rs/canvas';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
 // Only used as a predicate in the harness; the game itself runs inside jsdom.
-const { canAttack } = await import('../src/game/state.js');
+const { canAttack, update } = await import('../src/game/state.js');
 
 const errors = [];
 const logs = [];
@@ -143,7 +143,6 @@ assert(cards.length >= 20, `nation cards rendered (${cards.length})`);
 assert(!document.getElementById('btn-start').disabled, 'start button enabled');
 
 // choose a nation with a few provinces
-const pick = await window.evaluate ? null : null;
 const chosen = app.ui.nationsData.slice().sort((a, b) => b.provinces - a.provinces)[3];
 cards.forEach((c) => {
   if (Number(c.dataset.id) === chosen.nation.id) c.click();
@@ -204,6 +203,7 @@ const neighbour = front
     ]
   : null;
 assert(!!neighbour, `has a foreign neighbour (front: ${front ? front.name : 'none'})`);
+app.handlers.selectProvince(front.id); // Use the actual bordering land source, not a fleet.
 app.handlers.selectProvince(neighbour.id);
 await wait(320);
 const atkHTML = document.getElementById('inspector').innerHTML;
@@ -267,28 +267,18 @@ if (attackBtn) {
   errors.push('no attack button rendered');
 }
 
-// --- blocky takeover sweep: grab a mid-animation frame -------------------
-const taken = app.state.provinces.find((p) => p.prevOwnerId !== undefined && app.state.time >= p.captureTime);
-if (taken) {
-  const keepTime = app.state.time;
-  const keepSel = app.state.selectedProvinceId;
-  app.state.time = taken.captureTime + 0.45; // ~half way through the sweep
-  app.view.draw(app.state, {
-    time: 1,
-    showLabels: true,
-    showTroops: true,
-    selectedId: taken.id,
-    hoveredId: null,
-  });
-  mkdirSync('tmp-shots', { recursive: true });
-  const sweepShot = backing.get(document.getElementById('map'));
-  if (sweepShot) writeFileSync('tmp-shots/10-takeover.png', sweepShot.toBuffer('image/png'));
-  app.state.time = keepTime;
-  app.state.selectedProvinceId = keepSel;
-  assert(typeof app.view.takeoverProgress(app.state, taken) === 'number', `takeover sweep tracked (${taken.name})`);
-} else {
-  errors.push('no captured province available for the takeover preview');
-}
+// --- a real foothold, not a whole-province colour animation ----------------
+const foothold = neighbour.fronts.get(player.id);
+assert(foothold?.tiles.size > 0 && foothold.tiles.size < neighbour.areaPx, 'one push takes a patch, not the province');
+assert(document.querySelector('.front-caption')?.textContent.includes('Your control'), 'inspector reports occupied ground');
+assert(document.querySelector('#battle-report')?.textContent.includes('tiles'), 'battle report gives the actual tile gain');
+const oldCamera = { ...app.view.camera };
+app.view.focusProvince(neighbour, 2);
+app.view.draw(app.state, { time: 1, showLabels: false, showTroops: false });
+mkdirSync('tmp-shots', { recursive: true });
+const frontShot = backing.get(document.getElementById('map'));
+if (frontShot) writeFileSync('tmp-shots/10-frontier.png', frontShot.toBuffer('image/png'));
+app.view.camera = oldCamera;
 
 app.state.paused = false;
 
@@ -399,18 +389,31 @@ for (const prov of app.state.provinces) {
   if (frontProv) break;
 }
 assert(!!frontProv && !!tapTarget, 'found a province that can be tapped');
+for (const s of canAttack(app.state, livePlayer.id, tapTarget).sources) s.prov.troops = 18;
 frontProv.troops = 40;
 tapTarget.troops = 3;
-const tapTargetId = tapTarget.id;
+const claimedBefore = tapTarget.fronts.get(livePlayer.id)?.tiles.size || 0;
 const tapLossesBefore = livePlayer.stats.troopsLost;
 app.state.paused = true;
-app.handlers.clickProvince(tapTarget.id);
-assert(app.state.provinces[tapTargetId].nationId === livePlayer.id || livePlayer.stats.troopsLost > tapLossesBefore,
-  'a single tap on enemy land launches an assault');
+const tile = tapTarget.cells[0], { pixel, gridW } = app.world;
+app.handleMapClick(...app.view.worldToScreen((tile % gridW + .5)*pixel, (Math.floor(tile / gridW)+.5)*pixel));
+assert(livePlayer.stats.troopsLost > tapLossesBefore, 'a single map click costs soldiers');
+assert(tapTarget.nationId === livePlayer.id || tapTarget.fronts.get(livePlayer.id)?.tiles.size > claimedBefore,
+  'the same map click takes land');
 assert(frontProv.troops < 40, `the tap costs soldiers (${frontProv.troops.toFixed(1)} left)`);
 assert(document.querySelector('#battle-report.show'), 'tap-to-conquer shows the battle card');
 app.state.paused = false;
 livePlayer.gold = spendBefore;
+
+// Exercise the live recovery readout without waiting on wall-clock timers.
+frontProv.troops = 1;
+const decisions = app.state.nations.map(n => n.ai.nextDecision);
+for (const n of app.state.nations) n.ai.nextDecision = Infinity;
+for (let i = 0; i < 8; i++) update(app.state, .5);
+app.ui.update(app.state, 0);
+assert(frontProv.troops > 1 && document.getElementById('stat-replacements').textContent.includes('mustering'),
+  'resting troops refill and the army HUD shows their arrival rate');
+app.state.nations.forEach((n,i) => { n.ai.nextDecision = decisions[i]; });
 
 // --- version footer -------------------------------------------------------
 const versionMeta = document.querySelector('meta[name="app-version"]');

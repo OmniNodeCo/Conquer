@@ -20,8 +20,10 @@ import {
   relationWith,
   startNuke,
   beginAttack,
+  quickAttack,
   hasSilo,
 } from './state.js';
+import { sectorGuard } from './fronts.js';
 
 function borderProvinces(state, nationId) {
   return nationProvinces(state, nationId)
@@ -110,7 +112,7 @@ function aiEconomy(state, nation) {
 function scoreTarget(state, nation, prov, sources) {
   const bestSource = sources.reduce((acc, s) => (s.prov.troops > (acc ? acc.prov.troops : 0) ? s : acc), null);
   if (!bestSource) return null;
-  const power = defenseMultiplier(prov) * Math.max(1, prov.troops);
+  const power = defenseMultiplier(prov) * Math.max(1, sectorGuard(prov));
   const available = bestSource.prov.troops;
   const needed = power * 1.25 + 2;
   if (available < needed) return null;
@@ -121,14 +123,21 @@ function scoreTarget(state, nation, prov, sources) {
     prov,
     source: bestSource.prov,
     naval: bestSource.naval,
-    score: (1 + share) * strategic * navalPenalty * (1 + (available - needed) / (needed + 8)),
-    troops: Math.min(available - 1, Math.max(needed * 1.05, available * 0.86)),
+    score: (prov.fronts.has(nation.id) ? 1.65 : 1) * (1 + share) * strategic * navalPenalty * (1 + (available - needed) / (needed + 8)),
+    troops: Math.min(available - 1, Math.max(needed * 1.05, available * 0.32)),
   };
 }
 
 function aiMilitary(state, nation) {
   const provs = nationProvinces(state, nation.id);
   if (!provs.length) return;
+  // A home garrison can push back an incursion just as the player can by
+  // tapping an occupied tile. Don't use every turn to counter-push.
+  if (state.rng() < 0.35) {
+    for (const p of provs) for (const f of p.fronts.values()) {
+      if (quickAttack(state, nation.id, p, 0.25, f.tiles.values().next().value).ok) return 1;
+    }
+  }
   const atWar = nation.wars.length > 0;
   const aggression = nation.aggression * state.diff.aiAggro;
 

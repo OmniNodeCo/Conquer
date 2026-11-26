@@ -6,6 +6,7 @@ import { makeRng } from './rng.js';
 import { generateWorld, TERRAIN } from './worldgen.js';
 import { dist, clamp } from './geom.js';
 import { runAiTurn } from './ai.js';
+import { advanceTiles, heldTiles, sectorGuard, tileOwner } from './fronts.js';
 
 export const BUILDINGS = {
   city: {
@@ -75,6 +76,8 @@ export const TUNING = {
   neutralTroopsBase: 8,
   neutralTroopsPerValue: 2.5,
   neutralRegen: 0.55,
+  musterDelay: 3,
+  musterSeconds: 36,
   incomePerValue: 0.078,
   upkeepPerTroop: 0.011,
   manpowerPerMillion: 0.042,
@@ -127,6 +130,7 @@ export function createGame({
     selectedSourceId: null,
     hoverProvinceId: null,
     mode: 'idle',
+    landRevision: 0,
     expeditions: [],
     effects: [],
     log: [],
@@ -155,7 +159,8 @@ export function createGame({
     prov.buildings = { city: 0, fort: 0, port: 0, factory: 0, silo: 0, aa: 0 };
     prov.isCapital = isCapitol;
     prov.nukeTarget = false;
-    prov.captureTime = 0;
+    prov.fronts = new Map();
+    prov.musterAt = 0;
     if (prov.nationId === null) {
       prov.troops = TUNING.neutralTroopsBase + prov.value * TUNING.neutralTroopsPerValue;
     } else {
@@ -176,6 +181,7 @@ export function createGame({
     nation.isPlayer = nation.id === playerNationId;
     nation.alive = true;
     nation.incomeSmoothed = 0;
+    nation.replacementRate = 0;
     nation.ai = {
       nextDecision: 1.5 + Math.random() * 3,
       target: null,
@@ -223,7 +229,7 @@ export function provinceIncome(prov, state) {
   const port = prov.buildings.port || 0;
   const nation = state.nations[prov.nationId];
   const exhausted = nation && nation.exhaustionUntil > state.time ? 0.65 : 1;
-  return prov.value * TUNING.incomePerValue * (1 + 0.4 * city + 0.18 * port + 0.15 * factory) * exhausted;
+  return prov.value * TUNING.incomePerValue * (1 + 0.4 * city + 0.18 * port + 0.15 * factory) * exhausted * heldTiles(prov, prov.nationId) / prov.areaPx;
 }
 
 export function nationIncome(state, nationId) {
@@ -235,20 +241,14 @@ export function nationIncome(state, nationId) {
 }
 
 export function nationUpkeep(state, nationId) {
-  let troops = 0;
-  for (const prov of state.provinces) {
-    if (prov.nationId === nationId) troops += prov.troops;
-  }
-  for (const exp of state.expeditions) {
-    if (exp.nationId === nationId) troops += exp.troops;
-  }
-  return troops * TUNING.upkeepPerTroop;
+  return nationArmy(state, nationId) * TUNING.upkeepPerTroop;
 }
 
 export function nationArmy(state, nationId) {
   let troops = 0;
   for (const prov of state.provinces) {
     if (prov.nationId === nationId) troops += prov.troops;
+    else troops += prov.fronts.get(nationId)?.troops || 0;
   }
   for (const exp of state.expeditions) {
     if (exp.nationId === nationId) troops += exp.troops;
@@ -296,12 +296,18 @@ export function defenseMultiplier(prov) {
 }
 
 export function worldShare(state) {
-  const owned = state.provinces.filter((p) => p.nationId === state.playerNationId).length;
-  return owned / state.provinces.length;
+  return nationShare(state, state.playerNationId);
 }
 
 export function nationShare(state, nationId) {
-  return state.provinces.filter((p) => p.nationId === nationId).length / state.provinces.length;
+  let tiles = 0;
+  for (const p of state.provinces) tiles += heldTiles(p, nationId);
+  return tiles / state.world.landCellCount;
+}
+
+export function garrisonTarget(prov) {
+  const full = TUNING.startTroopsBase + prov.value * TUNING.startTroopsPerValue + 4 * prov.buildings.city;
+  return full * heldTiles(prov, prov.nationId) / prov.areaPx;
 }
 
 export function isAtWar(a, b) {
@@ -397,6 +403,7 @@ export function build(state, nationId, prov, key) {
   if (!check.ok) return check;
   state.nations[nationId].gold -= check.cost;
   prov.buildings[key] = (prov.buildings[key] || 0) + 1;
+  state.landRevision++;
   addEffect(state, {
     type: 'build',
     x: prov.centroid[0],
@@ -433,7 +440,7 @@ export function resolveBattle(atkTroops, defTroops, defMult, rng = Math.random) 
   const defenderLosses = defTroops * clamp(ratio * 0.6, 0.03, 0.85);
   return {
     win: false,
-    survivors: 0,
+    survivors: atkTroops * 0.04,
     attackerLosses: atkTroops * 0.96,
     defenderLosses,
   };
@@ -457,12 +464,14 @@ export function attackableSources(state, nationId, targetProv) {
   return sources;
 }
 
-export function canAttack(state, nationId, targetProv) {
+export function canAttack(state, nationId, targetProv, aim = null) {
   const nation = state.nations[nationId];
-  if (!nation) return { ok: false, reason: 'No nation' };
-  if (targetProv.nationId === nationId) return { ok: false, reason: 'Already yours' };
-  if (targetProv.nationId !== null) {
-    const target = state.nations[targetProv.nationId];
+  if (!nation?.alive || state.gameOver) return { ok: false, reason: 'Campaign ended' };
+  const counter = targetProv.nationId === nationId;
+  const defenderId = counter ? tileOwner(targetProv, aim) : targetProv.nationId;
+  if (defenderId === nationId) return { ok: false, reason: 'Already yours' };
+  if (defenderId !== null) {
+    const target = state.nations[defenderId];
     if (nation.allies.includes(target.id)) {
       return { ok: false, reason: 'Allied — break the alliance first' };
     }
@@ -470,9 +479,9 @@ export function canAttack(state, nationId, targetProv) {
       return { ok: false, reason: 'Truce in effect' };
     }
   }
-  const sources = attackableSources(state, nationId, targetProv);
+  const sources = counter ? [{ prov: targetProv, naval: false }] : attackableSources(state, nationId, targetProv);
   if (!sources.length) return { ok: false, reason: 'No bordering army or naval route' };
-  return { ok: true, sources };
+  return { ok: true, sources, defenderId };
 }
 
 export function declareWar(state, nationId, targetId, { silent = false } = {}) {
@@ -524,21 +533,24 @@ export function makePeace(state, aId, bId, { silent = false } = {}) {
   return hadWar;
 }
 
-export function beginAttack(state, nationId, sourceProv, targetProv, troops, naval) {
+export function beginAttack(state, nationId, sourceProv, targetProv, troops, naval, aim = null) {
+  const check = canAttack(state, nationId, targetProv, aim);
+  if (!check.ok) return check;
+  if (!check.sources.some(s => s.prov === sourceProv && s.naval === naval)) return { ok: false, reason: 'No route from this army' };
   const nation = state.nations[nationId];
-  if (!nation) return { ok: false, reason: 'No nation' };
   const available = Math.max(0, sourceProv.troops - 0.001);
   const send = clamp(troops, 0, available);
   if (send < 0.5) return { ok: false, reason: 'Not enough troops' };
-  if (nation.gold < (naval ? TUNING.navalCost : 0)) {
+  if (naval && nation.gold < TUNING.navalCost) {
     return { ok: false, reason: 'Not enough gold for the fleet' };
   }
 
-  if (targetProv.nationId !== null && !nation.wars.includes(targetProv.nationId)) {
-    declareWar(state, nationId, targetProv.nationId);
+  if (check.defenderId !== null && !nation.wars.includes(check.defenderId)) {
+    declareWar(state, nationId, check.defenderId);
   }
 
   sourceProv.troops -= send;
+  sourceProv.musterAt = state.time + TUNING.musterDelay;
   if (naval) nation.gold -= TUNING.navalCost;
 
   if (naval) {
@@ -552,6 +564,7 @@ export function beginAttack(state, nationId, sourceProv, targetProv, troops, nav
       nationId,
       fromId: sourceProv.id,
       toId: targetProv.id,
+      aim,
       troops: send,
       startTime: state.time,
       arriveTime: state.time + travel,
@@ -570,7 +583,7 @@ export function beginAttack(state, nationId, sourceProv, targetProv, troops, nav
     sourceProv,
     targetProv,
     troops: send,
-    naval: false,
+    naval: false, aim, defenderId: check.defenderId,
   });
   return { ok: true, naval: false, result, sent: send };
 }
@@ -579,100 +592,98 @@ export function beginAttack(state, nationId, sourceProv, targetProv, troops, nav
  * One-click assault used by tapping a province on the map: a chunk of the
  * strongest available source marches immediately.
  */
-export function quickAttack(state, nationId, targetProv, share = 0.25) {
+export function quickAttack(state, nationId, targetProv, share = 0.25, aim = null) {
   if (!targetProv) return { ok: false, reason: 'No target' };
   // Respect alliances and truces: a stray tap must not start a forbidden war.
-  const check = canAttack(state, nationId, targetProv);
+  const check = canAttack(state, nationId, targetProv, aim);
   if (!check.ok) return check;
   const sources = check.sources;
   if (!sources.length) return { ok: false, reason: 'No troops on that border' };
   const ordered = [...sources].sort((a, b) => b.prov.troops - a.prov.troops);
-  const pick = ordered[0];
-  const available = pick.prov.troops * share;
+  const pick = ordered.find(s => !s.naval || state.nations[nationId].gold >= TUNING.navalCost);
+  if (!pick) return { ok: false, reason: 'Not enough gold for the fleet' };
+  const available = pick.prov.troops * clamp(share, 0, 1);
   if (available < 0.6) return { ok: false, reason: 'Garrison too thin to attack' };
   const sent = Math.max(0.6, available);
-  const res = beginAttack(state, nationId, pick.prov, targetProv, sent, pick.naval);
+  const res = beginAttack(state, nationId, pick.prov, targetProv, sent, pick.naval, aim);
   if (!res.ok) return res;
   return { ...res, source: pick.prov, sent, naval: pick.naval };
 }
 
-export function resolveAttackNow(state, { nationId, sourceProv, targetProv, troops, naval }) {
+// Return displaced troops to the nearest friendly administration, if any.
+function retreat(state, nationId, origin, troops) {
+  if (nationId === null || !troops) return;
+  const [x, y] = origin.centroid;
+  const home = nationProvinces(state, nationId).sort((a, b) =>
+    dist(x, y, ...a.centroid) - dist(x, y, ...b.centroid))[0];
+  if (home) home.troops += troops;
+}
+
+export function resolveAttackNow(state, { nationId, sourceProv, targetProv: p, troops, naval, aim, defenderId = p.nationId }) {
   const attacker = state.nations[nationId];
-  const defenderId = targetProv.nationId;
-  const defender = defenderId !== null ? state.nations[defenderId] : null;
-  const defMult = defenseMultiplier(targetProv) * (naval ? 0.92 : 1);
-  const result = resolveBattle(troops, targetProv.troops, defMult, state.rng);
-
-  targetProv.troops = Math.max(0, targetProv.troops - result.defenderLosses);
-  attacker.stats.troopsLost += result.attackerLosses;
-  state.stats.troopsLost += result.attackerLosses;
-  if (defender) defender.stats.troopsLost += result.defenderLosses;
-
-  const playerInvolved = nationId === state.playerNationId || defenderId === state.playerNationId;
-  addEffect(state, {
-    type: 'battle',
-    x: targetProv.centroid[0],
-    y: targetProv.centroid[1],
-    win: result.win,
-    minor: !playerInvolved,
-    ttl: 1.9,
-  });
-
-  if (result.win) {
-    attacker.stats.battlesWon += 1;
-    state.stats.battlesWon += 1;
-    if (defender) defender.stats.battlesLost += 1;
-    captureProvince(state, targetProv, nationId, result.survivors);
-    const isPlayerBattle = nationId === state.playerNationId || defenderId === state.playerNationId;
-    if (isPlayerBattle) {
-      addFloatingText(
-        state,
-        targetProv.centroid[0],
-        targetProv.centroid[1] + 10,
-        `-${Math.round(result.attackerLosses * 1000).toLocaleString()}`,
-        '#ff8f8f'
-      );
-      addFloatingText(
-        state,
-        targetProv.centroid[0],
-        targetProv.centroid[1] - 18,
-        'VICTORY',
-        nationId === state.playerNationId ? '#ffe27a' : '#ff8f8f'
-      );
-    }
-    pushLog(
-      state,
-      `${attacker.name} captures ${targetProv.name}${defender ? ` from ${defender.name}` : ''}.`,
-      nationId === state.playerNationId ? 'victory' : defenderId === state.playerNationId ? 'defeat' : 'battle',
-      targetProv.id
-    );
-    if (defenderId !== null) {
-      checkElimination(state, defenderId);
+  const defender = state.nations[defenderId];
+  const counter = p.nationId === nationId;
+  const guard = sectorGuard(p, defenderId);
+  const strength = defenseMultiplier(p) * (naval ? 0.92 : 1);
+  const result = resolveBattle(troops, guard, strength, state.rng);
+  const pressure = troops / (troops + guard * strength + 1);
+  const fraction = result.win ? 0.12 + pressure * 0.10 : 0.035 + pressure * 0.075;
+  const tiles = advanceTiles(state.world, sourceProv, p, nationId, defenderId,
+    Math.max(1, Math.floor(p.areaPx * fraction)), naval, aim);
+  p.musterAt = state.time + TUNING.musterDelay;
+  p.frontRevision = (p.frontRevision || 0) + 1;
+  state.landRevision++;
+  if (counter) {
+    const invaders = p.fronts.get(defenderId);
+    invaders.troops -= result.defenderLosses;
+    for (const i of tiles) invaders.tiles.delete(i);
+    p.troops += result.survivors;
+    if (!invaders.tiles.size) {
+      p.fronts.delete(defenderId);
+      retreat(state, defenderId, p, invaders.troops);
     }
   } else {
-    attacker.stats.battlesLost += 1;
-    state.stats.battlesLost += 1;
-    if (defender) defender.stats.battlesWon += 1;
-    if (nationId === state.playerNationId || defenderId === state.playerNationId) {
-      addFloatingText(
-        state,
-        targetProv.centroid[0],
-        targetProv.centroid[1] + 10,
-        `-${Math.round(result.attackerLosses * 1000).toLocaleString()}`,
-        '#ff8f8f'
-      );
+    p.troops = Math.max(0, p.troops - result.defenderLosses);
+    if (!p.fronts.has(nationId)) p.fronts.set(nationId, { tiles: new Set(), troops: 0 });
+    const front = p.fronts.get(nationId);
+    for (const i of tiles) front.tiles.add(i);
+    front.troops += result.survivors;
+    if (!heldTiles(p, defenderId)) {
+      // In a three-way fight, holding the most land wins administration. Other
+      // footholds keep both their ground and their people; no last-click land grab.
+      let winner = nationId;
+      for (const [id, f] of p.fronts) if (f.tiles.size > p.fronts.get(winner).tiles.size) winner = id;
+      const garrison = p.fronts.get(winner).troops;
+      p.fronts.delete(winner);
+      const displaced = p.troops;
+      captureProvince(state, p, winner, garrison);
+      retreat(state, defenderId, p, displaced);
+      if (defender) checkElimination(state, defenderId);
     }
-    // Survivors straggle home.
-    const home = state.provinces[sourceProv.id];
-    if (home && home.nationId === nationId) home.troops += result.survivors;
-    pushLog(
-      state,
-      `${attacker.name}'s assault on ${targetProv.name} is repulsed.`,
-      nationId === state.playerNationId ? 'defeat' : defenderId === state.playerNationId ? 'victory' : 'battle',
-      targetProv.id
-    );
   }
-
+  result.captured = !counter && p.nationId === nationId;
+  result.gained = tiles.length;
+  result.held = heldTiles(p, nationId);
+  attacker.stats.troopsLost += result.attackerLosses;
+  const outcome = result.win ? 'battlesWon' : 'battlesLost';
+  attacker.stats[outcome]++;
+  if (defender) {
+    defender.stats.troopsLost += result.defenderLosses;
+    defender.stats[result.win ? 'battlesLost' : 'battlesWon']++;
+  }
+  const tip = tiles.at(-1), w = state.world.gridW, unit = state.world.pixel;
+  const x = (tip % w + 0.5) * unit, y = (Math.floor(tip / w) + 0.5) * unit;
+  const attacking = nationId === state.playerNationId;
+  const involved = attacking || defenderId === state.playerNationId;
+  const ourLosses = attacking ? result.attackerLosses : result.defenderLosses;
+  addEffect(state, { type: 'battle', x, y, win: result.win, minor: !involved, ttl: 1.3, tiles });
+  if (involved) {
+    state.stats.troopsLost += ourLosses;
+    state.stats[attacking === result.win ? 'battlesWon' : 'battlesLost']++;
+    addFloatingText(state, x, y, `−${Math.round(ourLosses * 1000).toLocaleString()}`, '#ffb09a');
+  }
+  pushLog(state, result.captured ? `${attacker.name} secures ${p.name}.` :
+    `${attacker.name} ${counter ? 'retakes' : 'takes'} ${tiles.length} tiles in ${p.name}.`, 'battle', p.id);
   checkVictory(state);
   return result;
 }
@@ -681,9 +692,6 @@ export function captureProvince(state, prov, nationId, survivors = 0) {
   const previous = prov.nationId;
   prov.nationId = nationId;
   prov.troops = Math.max(0, survivors);
-  prov.captureTime = state.time;
-  // Remember the colours to paint over so the renderer can sweep the new flag in.
-  prov.prevOwnerId = previous;
   // Ports survive but silos are scuttled; keep it simple: silos destroyed.
   prov.buildings.silo = 0;
   if (previous !== null) {
@@ -705,6 +713,7 @@ export function checkElimination(state, nationId) {
   const owned = nationProvinces(state, nationId).length;
   if (owned > 0) return;
   nation.alive = false;
+  for (const p of state.provinces) if (p.fronts.delete(nationId)) p.frontRevision = (p.frontRevision || 0) + 1;
   nation.wars = [];
   pushLog(state, `${nation.fullName} has been wiped from the map.`, 'elimination');
   if (nationId === state.playerNationId) {
@@ -788,6 +797,7 @@ export function launchNuke(state, nationId, targetProv) {
     }
   }
 
+  state.landRevision++;
   targetProv.troops *= 0.12;
   targetProv.population = Math.max(0.2, targetProv.population * 0.72);
   targetProv.value = Math.max(0.6, targetProv.value * 0.7);
@@ -891,7 +901,7 @@ export function breakAlliance(state, nationId, targetId) {
 // ---------------------------------------------------------------------------
 
 export function update(state, dtRaw) {
-  if (state.gameOver) return;
+  if (state.gameOver || state.paused || dtRaw <= 0) return;
   const dt = Math.min(dtRaw, 0.5);
   state.time += dt;
   state.day = 1 + Math.floor(state.time);
@@ -925,11 +935,29 @@ export function update(state, dtRaw) {
     }
   }
 
-  // Neutral garrisons slowly recover.
+  // Standing garrisons muster from the reserve after a quiet interval. Share a
+  // scarce reserve proportionally rather than starving late-index provinces.
+  const demand = new Float64Array(state.nations.length);
+  for (const p of state.provinces) {
+    if (p.nationId === null) continue;
+    const target = garrisonTarget(p);
+    const quiet = clamp(state.time - p.musterAt, 0, dt);
+    p.replacementDue = Math.min(Math.max(0, target - p.troops), target / TUNING.musterSeconds * quiet);
+    demand[p.nationId] += p.replacementDue;
+  }
+  for (const n of state.nations) {
+    const drawn = Math.min(n.manpower, demand[n.id]);
+    n.replacementRate = drawn / dt;
+    n.manpower -= drawn;
+    demand[n.id] = demand[n.id] ? drawn / demand[n.id] : 0;
+  }
+  for (const p of state.provinces) if (p.nationId !== null) p.troops += p.replacementDue * demand[p.nationId];
+
+  // Neutral garrisons have no shared manpower pool.
   for (const prov of state.provinces) {
-    if (prov.nationId === null) {
-      const cap = TUNING.neutralTroopsBase + prov.value * TUNING.neutralTroopsPerValue;
-      prov.troops = Math.min(cap, prov.troops + TUNING.neutralRegen * dt);
+    if (prov.nationId === null && state.time >= prov.musterAt) {
+      const cap = (TUNING.neutralTroopsBase + prov.value * TUNING.neutralTroopsPerValue) * heldTiles(prov, null) / prov.areaPx;
+      if (prov.troops < cap) prov.troops = Math.min(cap, prov.troops + TUNING.neutralRegen * dt);
     }
   }
 
@@ -947,8 +975,8 @@ export function update(state, dtRaw) {
       target.troops += exp.troops;
       continue;
     }
-    if (target.nationId !== null && attacker.allies.includes(target.nationId)) {
-      if (source.nationId === exp.nationId) source.troops += exp.troops;
+    if (target.nationId !== null && ((attacker.truces[target.nationId] || 0) > state.time || attacker.allies.includes(target.nationId))) {
+      retreat(state, exp.nationId, source, exp.troops);
       continue;
     }
     if (target.nationId !== null && !attacker.wars.includes(target.nationId)) {
@@ -959,7 +987,7 @@ export function update(state, dtRaw) {
       sourceProv: source,
       targetProv: target,
       troops: exp.troops,
-      naval: true,
+      naval: true, aim: exp.aim,
     });
   }
 

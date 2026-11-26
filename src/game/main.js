@@ -21,7 +21,8 @@ import {
   worldShare,
   pushLog,
 } from './state.js';
-import { generateWorld, findProvinceAt } from './worldgen.js';
+import { tileOwner } from './fronts.js';
+import { generateWorld, findProvinceAt, cellAt } from './worldgen.js';
 import { MapView } from './render.js';
 import { SoundEngine } from './audio.js';
 import { UI } from './ui.js';
@@ -307,15 +308,17 @@ class App {
     const [wx, wy] = this.view.screenToWorld(sx, sy);
     const prov = findProvinceAt(this.world, wx, wy);
     const id = prov ? prov.id : null;
-    if (id !== this.view.hoveredId) {
+    const ownerId = prov ? tileOwner(prov, cellAt(this.world, wx, wy)) : null;
+    if (id !== this.view.hoveredId || ownerId !== this.hoveredOwner) {
+      this.hoveredOwner = ownerId;
       this.view.hoveredId = id;
       this.hoverProvince = prov;
       this.canvas.style.cursor = prov ? 'pointer' : 'crosshair';
       if (prov && this.state) {
-        const owner = prov.nationId === null ? null : this.state.nations[prov.nationId];
+        const owner = this.state.nations[ownerId];
         const ownerName = owner ? owner.name : prov.tribe || 'Free territory';
         this.ui.showTooltip(
-          `<b>${prov.name}</b><br/>${ownerName} · ${prov.terrain}<br/>Garrison ${Math.round(prov.troops * 1000).toLocaleString()}`,
+          `<b>${prov.name}</b><br/>${ownerName} · ${prov.terrain}<br/>Garrison ${Math.round((prov.fronts.get(ownerId)?.troops ?? prov.troops) * 1000).toLocaleString()}`,
           sx,
           sy
         );
@@ -326,10 +329,10 @@ class App {
   }
 
   // ------------------------------------------------- tap-to-conquer helpers
-  quickAssault(id) {
+  quickAssault(id, aim) {
     const state = this.state;
     const target = state.provinces[id];
-    const res = quickAttack(state, state.playerNationId, target);
+    const res = quickAttack(state, state.playerNationId, target, 0.25, aim);
     if (!res.ok) {
       this.ui.toast(res.reason, 'loss');
       return;
@@ -394,7 +397,7 @@ class App {
       this.confirmNuke(prov);
       return;
     }
-    this.handlers.clickProvince(prov.id);
+    this.handlers.clickProvince(prov.id, cellAt(this.world, wx, wy));
   }
 
   // -------------------------------------------------------------- game flow
@@ -587,18 +590,22 @@ class App {
        * a hotbar slot is armed); anything else immediately sends a slice of the
        * nearest army at it.
        */
-      clickProvince(id) {
+      clickProvince(id, aim = null) {
         if (!self.state) return;
         const prov = self.state.provinces[id];
         if (!prov) return;
         if (self.buildMode) {
+          if (prov.nationId === self.state.playerNationId && tileOwner(prov, aim) !== prov.nationId) {
+            self.ui.toast('Reclaim this ground before building here.', 'info');
+            return;
+          }
           self.placeBuild(id);
           return;
         }
         self.handlers.selectProvince(id);
-        if (prov.nationId === self.state.playerNationId) return;
+        if (prov.nationId === self.state.playerNationId && tileOwner(prov, aim) === prov.nationId) return;
         if (self.state.gameOver) return;
-        self.quickAssault(id);
+        self.quickAssault(id, aim);
       },
       toggleBuildSlot(key) {
         if (!self.state || !BUILDINGS[key]) return;
@@ -680,7 +687,7 @@ class App {
         } else if (res.result) {
           // The report card is the feedback; no extra toast on top of it.
           self.ui.battleReport(self.state, target, res.result);
-          if (res.result.win) self.handlers.selectProvince(target.id);
+          if (res.result.captured) self.handlers.selectProvince(target.id);
         }
         self.ui.update(self.state, 0);
       },
@@ -828,6 +835,9 @@ class App {
         self.applySettings();
         self.saveSettings();
       },
+      clearPreview() {
+        self.view.attackTarget = self.view.attackSource = null;
+      },
       previewAttack({ targetId, sourceId, naval }) {
         if (!self.state) return;
         const target = self.state.provinces[targetId];
@@ -849,11 +859,11 @@ class App {
       if (!this.state.paused) {
         update(this.state, dt);
         this.processLog();
-        this.checkGameOver();
         this.maybeAutosave();
       }
     }
 
+    if (this.state?.gameOver) this.checkGameOver();
     const renderState = this.state || this.previewState;
     if (this.world && renderState) {
       this.view.draw(renderState, {

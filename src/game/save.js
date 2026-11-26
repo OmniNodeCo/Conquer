@@ -3,7 +3,7 @@
 
 import { createGame } from './state.js';
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 const KEY = 'conquer.save.v1';
 
 export function serialize(state) {
@@ -23,6 +23,8 @@ export function serialize(state) {
       n: p.nationId,
       t: Number(p.troops.toFixed(2)),
       b: { ...p.buildings },
+      musterAt: p.musterAt,
+      ...(p.fronts.size && { fronts: [...p.fronts].map(([id, f]) => ({ id, tiles: [...f.tiles], troops: f.troops })) }),
       pop: Number(p.population.toFixed(2)),
       val: Number(p.value.toFixed(2)),
     })),
@@ -46,7 +48,7 @@ export function serialize(state) {
 }
 
 export function deserialize(data) {
-  if (!data || data.version !== SAVE_VERSION) {
+  if (!data || (data.version !== 1 && data.version !== SAVE_VERSION)) {
     throw new Error('Unsupported save format');
   }
   const state = createGame({
@@ -66,6 +68,15 @@ export function deserialize(data) {
     if (!prov) return;
     prov.nationId = saved.n;
     prov.troops = saved.t;
+    prov.musterAt = Number.isFinite(saved.musterAt) ? saved.musterAt : 0;
+    const occupied = new Set();
+    for (const { id, tiles, troops } of saved.fronts || []) {
+      if (!Number.isInteger(id) || !state.nations[id] || id === prov.nationId || prov.fronts.has(id) || !Array.isArray(tiles)) continue;
+      const valid = tiles.filter(i => Number.isInteger(i) && state.world.provinceAt[i] === prov.id && !occupied.has(i));
+      if (!valid.length) continue;
+      for (const i of valid) occupied.add(i);
+      prov.fronts.set(id, { tiles: new Set(valid), troops: Number.isFinite(troops) ? Math.max(0, troops) : 0 });
+    }
     prov.buildings = { city: 0, fort: 0, port: 0, factory: 0, silo: 0, ...(saved.b || {}) };
     prov.population = saved.pop ?? prov.population;
     prov.value = saved.val ?? prov.value;

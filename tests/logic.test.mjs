@@ -190,7 +190,7 @@ test('clicking attack reports the soldiers the player lost', () => {
   const state = freshGame();
   const player = state.player;
   const prov = state.provinces.find(
-    (p) => p.nationId !== null && p.neighbours.some((id) => state.provinces[id].nationId !== p.nationId)
+    (p) => p.nationId === player.id && p.neighbours.some((id) => state.provinces[id].nationId !== p.nationId)
   );
   prov.troops = 40;
   const targetId = prov.neighbours.find((id) => state.provinces[id].nationId !== prov.nationId);
@@ -232,25 +232,14 @@ test('background AI activity does not spam the player with floaters', () => {
 test('AI battles animate quietly until the player is involved', () => {
   const state = freshGame();
   const player = state.player;
-  const ai = state.nations.find((n) => n.id !== player.id && n.alive);
-  const attacker = state.provinces.find((p) => p.nationId === ai.id && p.troops > 0);
-  const enemy = attacker.neighbours
-    .map((id) => state.provinces[id])
-    .find((p) => p.nationId !== null && p.nationId !== ai.id);
-  if (enemy) {
-    state.effects.length = 0;
-    attacker.troops = 60;
-    resolveAttackNow(state, {
-      nationId: ai.id,
-      sourceProv: attacker,
-      targetProv: enemy,
-      troops: 40,
-      naval: false,
-    });
-    const ring = state.effects.find((e) => e.type === 'battle');
-    assert.ok(ring, 'a battle ring is queued');
-    assert.equal(ring.minor, true, 'far-away AI battles must be dialled down');
-  }
+  const attacker = state.provinces.find(p => p.nationId !== null && p.nationId !== player.id &&
+    p.neighbours.some(i => ![p.nationId, player.id].includes(state.provinces[i].nationId)));
+  const enemy = attacker.neighbours.map(i => state.provinces[i]).find(p => ![attacker.nationId, player.id].includes(p.nationId));
+  attacker.troops = 60;
+  const order = beginAttack(state, attacker.nationId, attacker, enemy, 40, false);
+  assert.ok(order.ok);
+  assert.equal(state.effects.find(e => e.type === 'battle')?.minor, true, 'distant fronts only glint briefly');
+  assert.equal(state.stats.troopsLost, 0, 'AI casualties do not count as player losses');
 });
 
 test('attacking captures provinces and moves the army', () => {
@@ -266,8 +255,17 @@ test('attacking captures provinces and moves the army', () => {
   own.troops = 400;
   const res = beginAttack(state, state.playerNationId, own, target, 300, false);
   assert.equal(res.ok, true);
-  assert.equal(target.nationId, state.playerNationId, 'province captured');
+  assert.equal(target.nationId, null, 'even overwhelming force takes only part of the province');
   assert.ok(own.troops === 100);
+  assert.equal(target.fronts.get(player.id).troops, res.result.survivors);
+  let pushes = 1;
+  while (target.nationId !== player.id && pushes < 30) {
+    const next = beginAttack(state, player.id, own, target, 3, false);
+    assert.ok(next.ok && next.result.gained > 0);
+    pushes++;
+  }
+  assert.equal(target.nationId, player.id, 'persistent pushes capture the province');
+  assert.ok(target.troops >= res.result.survivors, 'the troops holding the line become its garrison');
   assert.ok(state.stats.provincesTaken >= 1);
 });
 
@@ -390,6 +388,9 @@ test('naval invasions need a port', () => {
 
 test('nukes require a silo and destroy a province', () => {
   const state = freshGame();
+  // Isolate the production clock: 95s of unrelated AI battles can leave the
+  // test target at zero troops before this strike even launches.
+  for (const nation of state.nations) nation.ai.nextDecision = Infinity;
   const player = state.player;
   player.gold = 5000;
   assert.equal(startNuke(state, player.id).ok, false);
@@ -454,7 +455,7 @@ test('long simulation is stable and the AI plays', () => {
     assert.ok(prov.troops >= 0, `${prov.name} troops non-negative`);
     assert.ok(Number.isFinite(prov.troops));
   }
-  const battles = state.stats.battlesWon + state.stats.battlesLost;
+  const battles = state.nations.reduce((sum, n) => sum + n.stats.battlesWon + n.stats.battlesLost, 0);
   assert.ok(battles > 0, 'battles were fought');
 });
 

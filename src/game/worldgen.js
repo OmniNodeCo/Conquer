@@ -355,6 +355,7 @@ export function generateWorld(seed = 12345, options = {}) {
       centroid,
       area: pixels.length * PIXEL * PIXEL,
       areaPx: pixels.length,
+      cells: pixels, // indices in provinceAt; the same parcels are drawn, fought over and hit-tested.
       elevation: elev[gi],
       moisture: moisture[gi],
       temperature: temperature[gi],
@@ -706,6 +707,7 @@ export function generateWorld(seed = 12345, options = {}) {
     coastRings,
     continents,
     avgProvincePixels,
+    landCellCount: provinces.reduce((sum, p) => sum + p.areaPx, 0),
     borderChains,
   };
 }
@@ -906,9 +908,12 @@ export function provinceContains(province, x, y) {
   return false;
 }
 
+export function cellAt(world, x, y) {
+  const cx = Math.floor(x / world.pixel), cy = Math.floor(y / world.pixel);
+  if (cx < 0 || cx >= world.gridW || cy < 0 || cy >= world.gridH) return -1;
+  return cy * world.gridW + cx;
+}
+
 export function findProvinceAt(world, x, y) {
-  for (const prov of world.provinces) {
-    if (provinceContains(prov, x, y)) return prov;
-  }
-  return null;
+  return world.provinces[world.provinceAt[cellAt(world, x, y)]] ?? null;
 }

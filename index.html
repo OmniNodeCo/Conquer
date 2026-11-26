@@ -4,14 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none';" />
-  <meta name="app-version" content="1.0.1" />
+  <meta name="app-version" content="1.1.0" />
   <title>Starting Conquer…</title>
   <link rel="stylesheet" href="src/styles/main.css" />
 </head>
 <body>
   <div id="app">
     <canvas id="map" aria-label="World map"></canvas>
-    <div id="map-fx"></div>
 
     <!-- ============================== IN-GAME HUD ============================== -->
     <div id="hud" class="hidden">
@@ -44,11 +43,11 @@
               <i id="stat-regen">+0.0/s</i>
             </div>
           </div>
-          <div class="res" title="Total army">
+          <div class="res" title="Garrisons, troops holding footholds and fleets. Resting provinces draw replacements from manpower.">
             <span class="res-icon" data-icon="army"></span>
             <div>
               <b id="stat-army">0</b>
-              <i>standing army</i>
+              <i id="stat-replacements">standing army</i>
             </div>
           </div>
           <div class="res" title="Provinces controlled">
@@ -123,7 +122,7 @@
 
       <footer id="app-footer">
         <span class="footer-brand">CONQUER</span>
-        <span id="footer-version">v1.0.1</span>
+        <span id="footer-version">v1.1.0</span>
         <span id="footer-update">checking for updates…</span>
         <button id="footer-update-btn" class="hidden">RESTART TO UPDATE</button>
       </footer>

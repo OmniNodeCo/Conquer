@@ -40,21 +40,24 @@ before the window appears; launch it once and leave your saved data in place.
   self-hosted bitmap typeface (Pixelify Sans for UI, VT323 for numbers, Silkscreen
   for headings). No gradients, no blur, no rounded corners, no CDN fonts — the
   whole game is offline and self-contained.
-- **Pixel-art map** — the political layer is rasterised into a world-anchored block
-  grid (one block = 4 world units) and scaled up with smoothing disabled, so
-  coastlines, borders and the banded sea stay chunky at every zoom level instead of
-  looking like smooth vector drawings. The layer is cached by ownership and only
-  rebuilt when the map changes or a takeover is playing.
-- **Pixelated takeovers** — capturing a province paints the new flag across it in a
-  blocky sweep over ~0.9s, old colours still visible under the advancing edge.
-- **Blocky interaction cues** — selection and hover are hard block outlines baked
-  into the map layer, attack orders draw as stepped, snapped arrows with marching
-  troop blocks, and label plates are square with a hard offset text shadow.
+- **A world made of pixels** — a land tile is four world units across. The actual
+  tile grid supplies the coasts, borders, mouse targets and minimap. On top of it
+  sit tiny inked pines, palms, snowy ridges, farms and roofed villages. Rivers join
+  on their way to the sea; a few wave crests catch the light. Zoom in to see the
+  brushwork. No scanlines or screen-space pixel filter.
+- **Front lines, not colour wipes** — each assault claims a connected patch at
+  the border (or a beachhead when a fleet lands). Survivors pitch camp on the
+  tiles. The land stays yours after the flash fades and when you reload; it counts
+  immediately towards the 80% goal. Lost ground cuts into the defender’s taxes.
+- **Replacements** — after three simulation seconds without sending troops or
+  being attacked, a depleted garrison gradually draws soldiers from national
+  manpower. Cities raise its normal strength; manual recruitment can exceed it.
+  Watch the army counter for the arrival rate. No recovery popups.
 - **26 playable nations** across 3 difficulties, each with a capital, flag, government
   type and AI personality (aggressive / turtle / opportunist / diplomat).
 - **Tap to conquer** — a single click on foreign land immediately sends a quarter of
-  the strongest army on that border. Clicking again sends another slice; if the
-  defenders hold, those men are lost. No slider, no confirmation dialog.
+  the strongest available army on that border. A breakthrough advances farther;
+  a costly push still takes a few tiles. No slider, no confirmation dialog.
 - **Build hotbar** — a bar along the bottom holds every structure (City, Castle,
   Port, Factory, Missile Silo, AA Battery, keys `1`-`6`). Arm a slot, then click
   your own provinces to place; placement stays armed for rapid building and
@@ -82,19 +85,21 @@ before the window appears; launch it once and leave your saved data in place.
   there is no 1× / 2× / 4× multiplier to micromanage.
 - **Quiet HUD** — one notification on screen at a time, repeats swallowed, and world
   news only interrupts when your nation is in it. AI drafts no longer spray `+15,000`
-  floaters across the map, and far-away AI battles animate as small, dim rings.
+  floaters across the map, and distant advances only glint briefly.
 - **Persistence** — autosave plus manual save/load; the desktop build writes a real
-  `campaign.json` in the OS user-data folder through Electron IPC.
+  `campaign.json` in the OS user-data folder through Electron IPC. Older v1
+  campaigns still load, with their original borders and no active footholds.
 
 ## Controls
 
 | Input | Action |
 | --- | --- |
-| Click province | Inspect it / select your source province |
+| Click your unoccupied land | Inspect it / select your source province |
 | Drag, scroll | Pan, zoom |
 | `Space` | Pause / resume (single speed) |
 | `1`-`6` | Arm a build hotbar slot |
-| Click enemy land | Attack / conquer it |
+| Click across a border | Advance into that province |
+| Click enemy-held tiles in your own province | Counterattack with the local garrison |
 | `F` | Focus your capital |
 | `H` | How to play |
 | `Esc` | Deselect, then menu |
@@ -103,8 +108,10 @@ before the window appears; launch it once and leave your saved data in place.
 
 Attack flow: **click a foreign province** — that is the attack. A quarter of your
 strongest bordering army marches immediately (a port province will sail instead).
-Click repeatedly to press the assault; the battle card reports the casualties each
-time. The inspector still offers a manual slider for a full-commitment attack.
+The battle card reports casualties, tiles gained and the share held. Click again
+to press the front, or rest to muster reserves. When the last defending tile falls,
+the largest occupier takes the province; other footholds stay in place. The
+inspector still offers a manual commitment slider.
 
 Building: press a hotbar key (`1`-`6`) or click a slot, then click one of your
 provinces. `Esc` cancels placement.
@@ -265,7 +272,9 @@ src/styles/main.css        all styling + the pixel skin (no framework, no networ
 src/game/worldgen.js       terrain + province generation (deterministic seed)
 src/game/state.js          the simulation: economy, recruitment, combat, nukes, victory
 src/game/ai.js             AI nation behaviour and diplomacy
-src/game/render.js         pixel-art map renderer (block layer, borders, takeovers, effects)
+src/game/fronts.js         connected parcel advances, sector strength and tile control
+src/game/map-art.js        seeded two-pixel atlas, hand-authored sprites and river drainage
+src/game/render.js         camera, political map, overlays, forecasts and minimap
 src/game/ui.js             HUD/inspector/modals, battle forecast + report cards
 src/game/save.js           versioned save/load
 src/game/main.js           app boot, loop, input, handlers
