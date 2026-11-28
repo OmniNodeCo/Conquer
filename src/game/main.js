@@ -14,14 +14,17 @@ import {
   startNuke,
   launchNuke,
   makePeace,
-  quickAttack,
+  orderTile,
+  marchSource,
+  canAttack,
+  canBuild,
   BUILDINGS,
   nationProvinces,
   worldShare,
   pushLog,
 } from './state.js';
 import { heldCell, nationSeat, tileOwner } from './fronts.js';
-import { siteAt } from './buildings.js';
+import { homePlot, siteAt } from './buildings.js';
 import { generateWorld, findProvinceAt, cellAt } from './worldgen.js';
 import { MapView } from './render.js';
 import { SoundEngine } from './audio.js';
@@ -138,7 +141,8 @@ class App {
     const canvas = this.canvas;
 
     canvas.addEventListener('pointerdown', (ev) => {
-      if (this.screen !== 'game') return;
+      if (this.screen !== 'game' || ev.button !== 0 || ev.isPrimary === false || !this.ui.el.modalRoot.classList.contains('hidden')) return;
+      this.pointer.id = ev.pointerId;
       this.audio.resume();
       this.pointer.down = true;
       this.pointer.dragging = false;
@@ -150,6 +154,8 @@ class App {
     });
 
     canvas.addEventListener('pointermove', (ev) => {
+      if (ev.isPrimary === false || (this.pointer.down && ev.pointerId !== this.pointer.id)) return;
+      this.pointer.overMap = true;
       this.pointer.x = ev.clientX;
       this.pointer.y = ev.clientY;
       if (this.pointer.down) {
@@ -162,6 +168,8 @@ class App {
           this.view.panBy(dx, dy);
           this.minimapDirty = true;
           this.canvas.style.cursor = 'grabbing';
+          this.view.plotCursor = null;
+          this.ui.hideTooltip();
         }
         this.pointer.lastX = ev.clientX;
         this.pointer.lastY = ev.clientY;
@@ -171,19 +179,25 @@ class App {
     });
 
     canvas.addEventListener('pointerup', (ev) => {
-      const wasDragging = this.pointer.dragging;
+      if (!this.pointer.down || ev.pointerId !== this.pointer.id || ev.button !== 0) return;
+      const wasDragging = this.pointer.dragging || Math.abs(ev.clientX - this.pointer.downX) + Math.abs(ev.clientY - this.pointer.downY) > 5;
       this.pointer.down = false;
       this.pointer.dragging = false;
       this.canvas.style.cursor = 'crosshair';
-      if (this.screen === 'game' && !wasDragging) this.handleMapClick(ev.clientX, ev.clientY);
+      if (this.screen === 'game' && !wasDragging && this.ui.el.modalRoot.classList.contains('hidden')) this.handleMapClick(ev.clientX, ev.clientY);
     });
 
-    canvas.addEventListener('pointerleave', () => {
+    const leaveMap = ev => {
+      if (ev.isPrimary === false || (this.pointer.down && ev.pointerId !== this.pointer.id)) return;
+      this.pointer.overMap = false;
+      this.view.plotCursor = null;
       this.pointer.down = false;
       this.pointer.dragging = false;
       this.view.hoveredId = null;
       this.ui.hideTooltip();
-    });
+    };
+    canvas.addEventListener('pointerleave', leaveMap);
+    canvas.addEventListener('pointercancel', leaveMap);
 
     canvas.addEventListener(
       'wheel',
@@ -199,12 +213,6 @@ class App {
     );
 
     canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
-    canvas.addEventListener('dblclick', (ev) => {
-      if (this.screen !== 'game') return;
-      this.view.zoomAt(ev.clientX, ev.clientY, 1.6);
-      this.minimapDirty = true;
-    });
-
     const mini = document.getElementById('minimap');
     mini.addEventListener('click', (ev) => {
       if (!this.world) return;
@@ -317,7 +325,26 @@ class App {
     const cell = cellAt(this.world, wx, wy);
     const ownerId = prov ? tileOwner(prov, cell) : null;
     const site = prov && (siteAt(prov, cell) || this.view.atlas.siteAtPoint(prov, wx, wy));
-    const siteKey = site ? `${site.key}:${site.cell}:${site.level}` : '';
+    let hint = '';
+    this.view.plotCursor = null;
+    if (this.buildMode && this.state?.mode === 'idle') {
+      const key = this.buildMode;
+      if (!prov) hint = 'Water · no orders here';
+      else if (homePlot(this.world, this.state.playerNationId, prov, cell)) {
+        const plot = site?.cell ?? cell;
+        const check = canBuild(this.state, this.state.playerNationId, prov, key, plot);
+        const ready = !!marchSource(this.state, this.state.playerNationId, prov);
+        this.view.plotCursor = { cell: plot, key, valid: ready && check.ok };
+        hint = !ready ? 'No ready troops for this order · use the inspector to build without marching'
+          : check.ok ? `${site ? 'Upgrade' : 'Place'} ${BUILDINGS[key].name} · ${check.cost} gold · send 25%`
+            : `No build: ${check.reason} · reinforce only`;
+      } else {
+        this.view.plotCursor = { cell, key, valid: false };
+        const check = canAttack(this.state, this.state.playerNationId, prov, cell);
+        hint = `No building here · ${check.ok ? 'click to send an assault' : check.code === 'no-route' ? 'click to stage troops' : check.reason}`;
+      }
+    }
+    const siteKey = `${site ? `${site.key}:${site.cell}:${site.level}` : ''}|${hint}`;
     if (id !== this.view.hoveredId || ownerId !== this.hoveredOwner || siteKey !== this.hoveredSiteKey) {
       this.hoveredOwner = ownerId;
       this.hoveredSiteKey = siteKey;
@@ -329,58 +356,41 @@ class App {
         const ownerName = owner ? owner.name : prov.tribe || 'Free territory';
         const landmark = site ? `<b>${BUILDINGS[site.key].name} · Lv ${site.level}</b><br/>` : '';
         this.ui.showTooltip(
-          `${landmark}<b>${prov.name}</b><br/>${ownerName} · ${prov.terrain}<br/>Garrison ${Math.round((prov.fronts.get(ownerId)?.troops ?? prov.troops) * 1000).toLocaleString()}`,
+          `${hint ? `<b>${hint}</b><br/>` : ''}${landmark}<b>${prov.name}</b><br/>${ownerName} · ${prov.terrain}<br/>Garrison ${Math.round((prov.fronts.get(ownerId)?.troops ?? prov.troops) * 1000).toLocaleString()}`,
           sx,
           sy
         );
-      } else {
-        this.ui.hideTooltip();
-      }
+      } else if (hint) this.ui.showTooltip(hint, sx, sy);
+      else this.ui.hideTooltip();
     }
   }
 
   // ------------------------------------------------- tap-to-conquer helpers
-  quickAssault(id, aim) {
-    const state = this.state;
-    const target = state.provinces[id];
-    const res = quickAttack(state, state.playerNationId, target, 0.25, aim);
-    if (!res.ok) {
-      this.ui.toast(res.reason, 'loss');
-      return;
-    }
-    if (res.naval) {
+  issueOrder(prov, cell, plot) {
+    const state = this.state, key = this.buildMode;
+    const res = orderTile(state, state.playerNationId, prov, cell, key, plot);
+    this.handlers.selectProvince(prov.id); // inspection accompanies the order; it never makes another one
+    if (!res.ok) { this.ui.orderMessage(res.reason); return; }
+    const number = Math.round(res.sent * 1000).toLocaleString();
+    let note;
+    if (res.march) {
+      note = res.staging ? `${number} staging at ${res.destination.name} · no route into ${prov.name} yet`
+        : `${number} ${res.source === prov ? 'on local patrol' : 'reinforcements sent'} to ${prov.name}`;
+      if (res.construction?.ok) {
+        note += ` · ${BUILDINGS[key].name} ${res.construction.site.level > 1 ? 'upgraded' : 'placed'}`;
+        this.audio.build();
+        if (state.player.gold < BUILDINGS[key].cost) this.cancelBuildMode();
+      } else if (res.construction) note += ` · No build: ${res.construction.reason}`;
+    } else if (res.naval) {
       this.audio.naval();
-      this.ui.toast(`Fleet away — ${Math.round(res.sent * 1000).toLocaleString()} men at sea.`, 'info', '⚓');
-      this.ui.update(state, 0);
-      return;
+      note = `${number} sailing to ${prov.name}`;
+    } else {
+      this.audio.cannon();
+      this.ui.battleReport(state, prov, res.result);
+      note = `${number} dispatched from ${res.source.name} · ${res.result.gained} tiles taken`;
     }
-    this.audio.cannon();
-    if (res.result) {
-      this.ui.battleReport(state, target, res.result);
-    }
+    this.ui.orderMessage(note);
     this.ui.markDirty();
-    this.ui.update(state, 0);
-  }
-
-  placeBuild(id, cell) {
-    const state = this.state;
-    const prov = state.provinces[id];
-    const key = this.buildMode;
-    if (!key) return;
-    const res = build(state, state.playerNationId, prov, key, cell);
-    if (!res.ok) {
-      this.ui.toast(res.reason, 'loss');
-      return;
-    }
-    this.audio.cash();
-    this.ui.toast(`${BUILDINGS[key].name} ${res.site.level > 1 ? `upgraded to Lv ${res.site.level}` : 'placed'} in ${prov.name}.`, 'info', '◆');
-    this.ui.markDirty();
-    this.handlers.selectProvince(id);
-    // Stay in placement mode for rapid building, but drop it when gold runs out.
-    if (state.nations[state.playerNationId].gold < BUILDINGS[key].cost) {
-      this.buildMode = null;
-      this.ui.setBuildMode(null);
-    }
     this.ui.update(state, 0);
   }
 
@@ -388,16 +398,18 @@ class App {
     if (!this.buildMode) return false;
     this.buildMode = null;
     this.ui.setBuildMode(null);
+    this.view.plotCursor = null;
     this.ui.update(this.state, 0);
     return true;
   }
 
   handleMapClick(sx, sy) {
-    if (!this.world) return;
+    if (!this.state || this.screen !== 'game' || !this.ui.el.modalRoot.classList.contains('hidden')) return;
     const [wx, wy] = this.view.screenToWorld(sx, sy);
     const prov = findProvinceAt(this.world, wx, wy);
     if (!prov) {
       this.deselect();
+      this.ui.orderMessage('Open water · choose a land tile');
       return;
     }
     if (this.state.mode === 'nuke') {
@@ -407,9 +419,9 @@ class App {
     const cell = cellAt(this.world, wx, wy);
     // An upgrade may hit the roof rather than its central parcel. Never snap
     // across an occupied tile, or change the aim of a normal assault.
-    const site = this.buildMode && tileOwner(prov, cell) === this.state.playerNationId
+    const site = this.buildMode && homePlot(this.world, this.state.playerNationId, prov, cell)
       ? siteAt(prov, cell) || this.view.atlas.siteAtPoint(prov, wx, wy) : null;
-    this.handlers.clickProvince(prov.id, site?.cell ?? cell);
+    this.handlers.clickProvince(prov.id, cell, site?.cell ?? cell);
   }
 
   // -------------------------------------------------------------- game flow
@@ -559,6 +571,7 @@ class App {
 
   setNukeMode(on) {
     if (!this.state) return;
+    if (on) this.cancelBuildMode();
     this.state.mode = on ? 'nuke' : 'idle';
     if (on) {
       this.ui.toast('Select a target province for the warhead.', 'war', '☢');
@@ -593,29 +606,16 @@ class App {
   buildHandlers() {
     const self = this;
     this.handlers = {
-      /**
-       * A single tap on the map. Own land selects (or receives a structure when
-       * a hotbar slot is armed); anything else immediately sends a slice of the
-       * nearest army at it.
-       */
-      clickProvince(id, aim = null) {
-        if (!self.state) return;
-        const prov = self.state.provinces[id];
-        if (!prov) return;
-        if (self.buildMode) {
-          self.placeBuild(id, aim);
-          return;
-        }
-        self.handlers.selectProvince(id);
-        if (prov.nationId === self.state.playerNationId && tileOwner(prov, aim) === prov.nationId) return;
-        if (self.state.gameOver) return;
-        self.quickAssault(id, aim);
+      clickProvince(id, cell, plot = cell) {
+        const prov = self.state?.provinces[id];
+        if (prov) self.issueOrder(prov, cell, plot);
       },
       toggleBuildSlot(key) {
         if (!self.state || !BUILDINGS[key]) return;
+        if (self.state.mode === 'nuke') self.setNukeMode(false);
         self.buildMode = self.buildMode === key ? null : key;
         self.ui.setBuildMode(self.buildMode);
-        if (self.buildMode) self.ui.toast(`${BUILDINGS[key].name} — click a tile on your land.`, 'info', '◆');
+        self.view.plotCursor = null;
         self.ui.update(self.state, 0);
       },
       installUpdate() {
@@ -884,6 +884,9 @@ class App {
         if (this.uiTick > 0.12) {
           this.uiTick = 0;
           this.ui.update(this.state, dt);
+          if (this.pointer.overMap && this.buildMode && !this.pointer.down && this.ui.el.modalRoot.classList.contains('hidden')) {
+            this.updateHover(this.pointer.x, this.pointer.y);
+          }
           this.handlePendingDialog();
         }
       }

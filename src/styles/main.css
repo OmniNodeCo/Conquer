@@ -530,7 +530,7 @@ input[type="range"]::-webkit-slider-thumb {
 /* --------------------------------------------------------------- hint bar */
 #hint-bar {
   position: absolute;
-  left: 50%; bottom: 16px;
+  left: 50%; bottom: 8px;
   transform: translateX(-50%);
   padding: 7px 16px;
   border-radius: 999px;
@@ -539,7 +539,9 @@ input[type="range"]::-webkit-slider-thumb {
   font-size: 11px;
   letter-spacing: 0.05em;
   color: var(--muted-2);
-  white-space: nowrap;
+  width: max-content;
+  max-width: min(680px, calc(100vw - 540px));
+  text-align: center;
   z-index: 18;
   display: flex;
   gap: 10px;

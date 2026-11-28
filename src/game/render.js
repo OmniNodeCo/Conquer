@@ -3,6 +3,7 @@
 // node-canvas for offline previews.
 
 import { PixelAtlas, stamp } from './map-art.js';
+import { siteOrigin } from './site-shapes.js';
 import { TERRAIN, PIXEL, cellCenter } from './worldgen.js';
 import { clamp } from './geom.js';
 import { withAlpha } from './color.js';
@@ -56,6 +57,7 @@ export class MapView {
   setWorld(world) {
     this.world = world;
     this.locator = null;
+    this.plotCursor = null;
     this.attackTarget = this.attackSource = null;
     this.politicalKey = null;
     this.atlas = new PixelAtlas(world, this.surface);
@@ -175,7 +177,11 @@ export class MapView {
 
     // ---- crisp interaction layer on top of the blocks
     this.drawAttackPreview(state, zoom);
-    this.drawExpeditions(state, zoom);
+    this.drawExpeditions(state);
+    for (const fx of state.effects) if (fx.type === 'battle' && fx.fromCell != null) {
+      this.drawColumn(fx.fromCell, fx.toCell, fx.t / fx.ttl, state.nations[fx.nationId].color);
+    }
+    if (this.plotCursor && state.started) this.drawPlotCursor();
     ctx.restore();
 
     // ---------------------------------------------------- screen-space layer
@@ -193,9 +199,46 @@ export class MapView {
     return this.politicalCanvas;
   }
 
+  drawPlotCursor() {
+    const { cell, key, valid } = this.plotCursor, u = this.world.pixel / 2;
+    const [cx, cy] = cellCenter(this.world, cell), ctx = this.ctx;
+    ctx.save();
+    if (valid) {
+      const [x, y] = siteOrigin(cell, key, this.world.gridW), img = this.atlas.siteSymbols[key];
+      ctx.globalAlpha = .65;
+      ctx.drawImage(img, x*u, y*u, img.width*u, img.height*u);
+    } else {
+      // A red cross rather than a ghost building on land we cannot build on.
+      ctx.fillStyle = '#ff9980';
+      for (let i = -2; i <= 2; i++) {
+        ctx.fillRect(cx+i*u, cy+i*u, u, u); ctx.fillRect(cx-i*u, cy+i*u, u, u);
+      }
+    }
+    ctx.restore();
+  }
+
+  drawColumn(from, to, progress, color) {
+    const [x, y] = cellCenter(this.world, from), [tx, ty] = cellCenter(this.world, to);
+    const u = this.world.pixel / 2, ctx = this.ctx;
+    for (let n = 0; n < 3; n++) {
+      const t = clamp(progress * 1.15 - n*.075, 0, 1), step = Math.floor(progress*10 + n) % 2;
+      const sx = Math.round((x + (tx-x)*t)/u)*u + (n-1)*2*u;
+      const sy = Math.round((y + (ty-y)*t)/u)*u + (n%2)*2*u;
+      ctx.fillStyle = '#263742'; ctx.fillRect(sx-u, sy-4*u, 3*u, u);
+      ctx.fillStyle = '#f0c69e'; ctx.fillRect(sx, sy-3*u, 2*u, u);
+      ctx.fillStyle = '#30424a'; ctx.fillRect(sx-u, sy-2*u, 3*u, 2*u);
+      ctx.fillStyle = color; ctx.fillRect(sx, sy-2*u, 2*u, 2*u);
+      ctx.fillStyle = '#263742'; ctx.fillRect(sx+(step-1)*u, sy, 2*u, u);
+    }
+  }
+
   drawExpeditions(state) {
     const ctx = this.ctx, unit = this.world.pixel / 2;
     for (const exp of state.expeditions) {
+      if (exp.kind === 'march') {
+        this.drawColumn(exp.fromCell, exp.aim, (state.time - exp.startTime) / (exp.arriveTime - exp.startTime), state.nations[exp.nationId].color);
+        continue;
+      }
       const [x, y] = state.provinces[exp.fromId].centroid;
       const [tx, ty] = state.provinces[exp.toId].centroid;
       const t = clamp((state.time - exp.startTime) / (exp.arriveTime - exp.startTime), 0, 1);

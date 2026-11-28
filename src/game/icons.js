@@ -17,10 +17,7 @@ export const ICONS = {
   province: wrap(`
     <path d="M6 21V4.2l9 2.2V16l-9 2.2z"/>
     <path d="M15 6.4h3.4v9.4"/>`),
-  city: wrap(`
-    <path d="M4 20.4h16"/>
-    <path d="M6 20.4V10l4-2.6V20.4M10 20.4V7.4l4-2.6v15.6M14 20.4v-7l4-2.2v9.6"/>
-    <path d="M8 13h.01M8 16h.01M12 11h.01M12 14h.01M16 16h.01"/>`),
+  city: wrap('<circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="3.3" fill="currentColor" stroke="none"/>'),
   fort: wrap(`
     <path d="M4 20.4V9.6l2.4-1.8V5l2.2 1.6V5l2.2 1.6V10l2.4 1.8v8.6z"/>
     <path d="M9.4 20.4v-4.2h2.6v4.2"/>

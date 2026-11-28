@@ -35,7 +35,8 @@ function consistent(world, p) {
 
 test('construction spends once at the aimed parcel; invalid placements cannot move buildings or spend gold', () => {
   const { s, p } = field();
-  const [a,b,c] = p.cells;
+  const [a,b] = p.cells.filter(i => canBuild(s, p.nationId, p, 'city', i).ok);
+  const c = p.cells.at(-1); // away from the two valid footprints
   const gold = s.player.gold;
   const city = place(s, p, 'city', a);
   assert.deepEqual(city, { key: 'city', cell: a, level: 1 });
@@ -154,9 +155,10 @@ test('all six purchased symbols are painted at their sites even with labels on, 
   view.setWorld(s.world);
   const signatures = new Set();
   for (const { key, cell } of p.sites) {
-    const sprite = createCanvas(11, 11), ctx = sprite.getContext('2d');
+    const size = key === 'city' ? 5 : 11, half = size >> 1;
+    const sprite = createCanvas(size, size), ctx = sprite.getContext('2d');
     stamp(ctx, key, 0, 0);
-    const expected = ctx.getImageData(0, 0, 11, 11).data;
+    const expected = ctx.getImageData(0, 0, size, size).data;
     signatures.add(Buffer.from(expected).toString('base64'));
     const [wx, wy] = cellCenter(s.world, cell), u = s.world.pixel/2;
     for (const [zoom, dpr] of [[1.2, 1], [2.75, 2]]) {
@@ -165,17 +167,21 @@ test('all six purchased symbols are painted at their sites even with labels on, 
       view.draw(s, { showTroops: true, showLabels: true, selectedId: p.id });
       const screen = view.ctx.getImageData(0, 0, canvas.width, canvas.height).data;
       let ink = 0;
-      for (let y = 0; y < 11; y++) for (let x = 0; x < 11; x++) {
-        const j = (y*11 + x)*4;
+      for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+        const j = (y*size + x)*4;
         if (!expected[j+3]) continue;
-        const px = wx + (x-5+.5)*u, py = wy + (y-5+.5)*u;
+        const px = wx + (x-half+.5)*u, py = wy + (y-half+.5)*u;
         assert.equal(view.atlas.siteAtPoint(p, px, py)?.cell, cell);
         const [sx, sy] = view.worldToScreen(px, py);
         const i = (Math.floor(sy*dpr)*canvas.width + Math.floor(sx*dpr))*4;
         assert.deepEqual(screen.slice(i,i+4), expected.slice(j,j+4), `${key} at ${zoom}x, pixel ${x},${y}`);
         ink++;
       }
-      assert.ok(ink > 25, `${key} must be a visible sprite`);
+      if (key === 'city') {
+        assert.equal(ink, 21, 'compact disc with four transparent corners');
+        assert.equal(view.atlas.siteSymbols.city.width, 5);
+        assert.equal(view.atlas.siteAtPoint(p, wx-2*u, wy-2*u), null);
+      } else assert.ok(ink > 25, `${key} must be a visible sprite`);
     }
   }
   assert.equal(signatures.size, 6);

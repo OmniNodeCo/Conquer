@@ -42,7 +42,7 @@ before the window appears; launch it once and leave your saved data in place.
   whole game is offline and self-contained.
 - **A world made of pixels** — a land tile is four world units across. The actual
   tile grid supplies the coasts, borders, mouse targets and minimap. On top of it
-  sit tiny inked pines, palms, snowy ridges, farms and roofed villages. Rivers join
+  sit tiny inked pines, palms, snowy ridges, farms and round settlement markers. Rivers join
   on their way to the sea; a few wave crests catch the light. Zoom in to see the
   brushwork. No scanlines or screen-space pixel filter.
 - **Front lines, not colour wipes** — each assault claims a connected patch at
@@ -55,17 +55,22 @@ before the window appears; launch it once and leave your saved data in place.
   Watch the army counter for the arrival rate. No recovery popups.
 - **26 playable nations** across 3 difficulties, each with a capital, flag, government
   type and AI personality (aggressive / turtle / opportunist / diplomat).
-- **Tap to conquer** — a single click on foreign land immediately sends a quarter of
-  the strongest available army on that border. A breakthrough advances farther;
-  a costly push still takes a few tiles. No slider, no confirmation dialog.
+- **Every land click is a troop order** — send 25% of a ready garrison, with
+  the number sent shown immediately. Click home to bring up reinforcements (or
+  patrol from the local garrison); click a reachable rival to attack. If the
+  target has no invasion route, troops stage on your side of the border.
+  Truces, allies, empty garrisons and open water do not spend soldiers.
 - **Find my land** — click your flag in the top bar or press `L`. Search your
   provinces, footholds and buildings by name. Select a result to
   centre the map without attacking, spending gold or placing anything. The
   minimap's gold flag, **Home** button and `F` shortcut follow your capital, or
   your largest remaining holding if the capital falls.
 - **Build hotbar** — arm a structure (`1`–`6`), then click a tile you hold in
-  your province. A little pixel city, castle, battery, harbour, factory or silo
-  stays on that parcel. Hover over its icon for its name and level. Build the
+  your province. A friendly order dispatches troops and can build; a foreign
+  order dispatches troops but never builds. A red cross means no construction.
+  A purchased city is a small gold circle, distinct from the nation-coloured
+  settlement dots. Castles, batteries, ports, factories and silos keep their
+  pixel silhouettes. Hover over a site for its name and level. Build the
   same type on that icon to upgrade it, or use another clear tile for a new site;
   costs and level caps are still per province. Inspector and bot orders choose
   their own sites. `Esc` cancels placement.
@@ -95,14 +100,15 @@ before the window appears; launch it once and leave your saved data in place.
   floaters across the map, and distant advances only glint briefly.
 - **Persistence** — autosave plus manual save/load; the desktop build writes a real
   `campaign.json` in the OS user-data folder through Electron IPC. Sites, their
-  levels and occupied tiles survive save/load. Older v1/v2 campaigns keep their building bonuses;
-  structures without saved coordinates receive stable sites in their province.
+  levels, occupied tiles, and troops in transit survive save/load. v1–v3 saves
+  still load; older buildings without coordinates receive stable sites, and
+  old naval expeditions remain fleets.
 
 ## Controls
 
 | Input | Action |
 | --- | --- |
-| Click your unoccupied land | Inspect it / select your source province |
+| Click your held home land | Send a quarter-army reinforcement or local patrol; also inspect the province |
 | Drag, scroll | Pan, zoom |
 | `Space` | Pause / resume (single speed) |
 | `1`-`6` | Arm a build hotbar slot |
@@ -115,7 +121,7 @@ before the window appears; launch it once and leave your saved data in place.
 | `F11` | Fullscreen |
 | `F12` | DevTools (development builds only) |
 
-Attack flow: **click a foreign province** — that is the attack. A quarter of your
+Attack flow: **click a reachable foreign province** — that is the attack. A quarter of your
 strongest bordering army marches immediately (a port province will sail instead).
 The battle card reports casualties, tiles gained and the share held. Click again
 to press the front, or rest to muster reserves. When the last defending tile falls,
@@ -123,8 +129,10 @@ the largest occupier takes the province; other footholds stay in place. The
 inspector still offers a manual commitment slider.
 
 Building: press a hotbar key (`1`-`6`) or click a slot, then click a clear tile
-on your land. Ports need a coastal province. A tile under enemy occupation must
-be reclaimed first. `Esc` cancels placement.
+on your land. The anchor must be in a province you administer and the footprint
+must not cross onto foreign, tribal or enemy-occupied land. A foothold abroad
+is not a build permit. Ports need a coastal province. The inspector can build
+without issuing a troop order; `Esc` disarms the hotbar.
 
 | Hotbar | Structure |
 | --- | --- |
@@ -134,6 +142,8 @@ be reclaimed first. `Esc` cancels placement.
 | `4` | Port — naval invasions |
 | `5` | Factory — cheaper recruits, more income |
 | `6` | Missile Silo — unlocks warheads |
+
+[Roblox screenshots, map gallery and match footage](docs/visual-references.md) (reference only; not part of the game).
 
 ## Developer setup
 
@@ -182,7 +192,8 @@ profile override. It waits for a native window with the title the renderer sets
 **after** the title screen initializes, then closes it and checks for a clean exit.
 On Windows and Linux, a second test loads the packaged `app.asar` in Electron
 with networking blocked, starts a campaign, builds a city and locates its site
-using the on-screen buttons.
+using the on-screen buttons. A native mouse click on that site must dispatch one
+reinforcement column.
 Desktop artifacts are kept for 30 days. UI screenshots are diagnostic only.
 
 [Release](.github/workflows/release.yml) publishes **those artifacts**, without

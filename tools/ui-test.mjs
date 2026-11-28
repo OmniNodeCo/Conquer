@@ -1,11 +1,12 @@
 // Integration test: boots the real game code inside jsdom with node-canvas,
 // drives the campaign flow and asserts that everything works.
 import { JSDOM } from 'jsdom';
+import { checkFieldClicks } from './check-field-clicks.mjs';
 import { createCanvas } from '@napi-rs/canvas';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
 // Only used as a predicate in the harness; the game itself runs inside jsdom.
-const { canAttack, update } = await import('../src/game/state.js');
+const { canAttack, canBuild, update } = await import('../src/game/state.js');
 const { cellCenter } = await import('../src/game/worldgen.js');
 const { tileOwner, heldCell, nationSeat } = await import('../src/game/fronts.js');
 
@@ -350,7 +351,9 @@ app.state.paused = false;
 app.handlers.enterNukeMode();
 assert(app.state.mode === 'nuke', 'nuke targeting mode');
 const target = app.state.provinces.find((p) => p.nationId !== player.id);
-app.confirmNuke(target);
+const strikeOrders = app.state.expeditions.length, strikeLosses = player.stats.troopsLost;
+app.handleMapClick(...app.view.worldToScreen(...cellCenter(app.world, target.seatCell)));
+assert(app.state.expeditions.length === strikeOrders && player.stats.troopsLost === strikeLosses, 'explicit warhead targeting does not send a regular army');
 await wait(200);
 const launchBtn = document.querySelector('[data-modal-index="1"]');
 if (launchBtn) {
@@ -399,12 +402,12 @@ assert(document.getElementById('bb-hint').textContent.length > 0, 'hotbar hint v
 
 const castleSlot = document.querySelector('#bb-slots .bb-slot[data-key="fort"]');
 const spendBefore = livePlayer.gold;
-const ownForBuild = app.state.provinces.find((p) => p.nationId === livePlayer.id && p.id !== capital.id);
 livePlayer.gold = 900;
+const ownForBuild = app.state.provinces.find(p => p.nationId === livePlayer.id && p.id !== capital.id && canBuild(app.state, livePlayer.id, p, 'fort').ok);
 castleSlot.click();
 assert(app.buildMode === 'fort', 'clicking a slot arms placement mode');
 assert(document.getElementById('bb-hint').classList.contains('placing'), 'hotbar shows placement state');
-const buildCell = ownForBuild.cells.find(i => i !== ownForBuild.seatCell && tileOwner(ownForBuild, i) === livePlayer.id &&
+const buildCell = ownForBuild.cells.find(i => i !== ownForBuild.seatCell && canBuild(app.state, livePlayer.id, ownForBuild, 'fort', i).ok &&
   !app.view.atlas.siteAtPoint(ownForBuild, ...cellCenter(app.world, i)) && !ownForBuild.sites.some(s => s.cell === i));
 const buildXY = cellCenter(app.world, buildCell);
 app.view.focusProvince(ownForBuild, 1.8, buildCell);
@@ -416,16 +419,17 @@ assert(castle?.cell === buildCell && ownForBuild.buildings.fort === 1, 'hotbar c
 app.updateHover(...clickXY);
 assert(document.getElementById('tooltip').textContent.includes('Castle · Lv 1'), 'hover identifies the map building without the inspector');
 assert(livePlayer.gold < 900, 'placing a castle costs gold');
+assert(app.state.expeditions.some(e => e.kind === 'march' && e.aim === buildCell && e.troops > 0), 'placing on home soil also sends a real column');
 assert(app.buildMode === 'fort', 'placement stays armed for rapid building');
 app.handleMapClick(...clickXY);
 assert(castle.level === 2 && ownForBuild.sites.filter(s => s.key === 'fort').length === 1, 'rebuilding at the same spot upgrades the existing landmark');
-const afterBuild = livePlayer.gold;
+const afterBuild = livePlayer.gold, marchCount = app.state.expeditions.length;
 app.view.fitWorld();
 chip.click(); searchAtlas('cAsTlE');
 const landmark = document.querySelector(`.atlas-sites button[data-find-province="${ownForBuild.id}"][data-cell="${buildCell}"]`);
 assert(landmark?.textContent.includes('Lv 2'), 'buildings are searchable by name and list their level');
 landmark.click();
-assert(app.view.camera.x === buildXY[0] && app.view.camera.y === buildXY[1] && livePlayer.gold === afterBuild && castle.level === 2,
+assert(app.view.camera.x === buildXY[0] && app.view.camera.y === buildXY[1] && livePlayer.gold === afterBuild && castle.level === 2 && app.state.expeditions.length === marchCount,
   'a building result centres its exact site without issuing another construction order');
 // F, the finder and the minimap must agree after a change of capital.
 const liveCapital = app.state.provinces[livePlayer.capitalId];
@@ -435,9 +439,26 @@ chip.click(); document.getElementById('atlas-home').click();
 assert(app.state.selectedProvinceId === standIn.id && app.view.locator.cell === heldCell(standIn, livePlayer.id), 'Go home finds remaining land when the capital is lost');
 liveCapital.nationId = livePlayer.id;
 document.getElementById('btn-home').click();
-assert(app.state.selectedProvinceId === liveCapital.id, 'minimap Home follows the restored capital');
+assert(app.state.selectedProvinceId === liveCapital.id && app.state.expeditions.length === marchCount, 'minimap Home follows the restored capital without issuing orders');
 app.cancelBuildMode();
 assert(app.buildMode === null, 'escape/cancel leaves placement mode');
+
+// An actual press/release must issue exactly one order, never one on a drag,
+// right-click, cancelled press, or a release that started on a HUD button.
+const fieldCanvas = document.getElementById('map');
+fieldCanvas.setPointerCapture ??= () => {};
+const marchHere = app.view.worldToScreen(...cellCenter(app.world, heldCell(liveCapital, livePlayer.id)));
+const pointer = (type, dx = 0, button = 0) => fieldCanvas.dispatchEvent(new window.MouseEvent(type, {
+  bubbles: true, button, clientX: marchHere[0]+dx, clientY: marchHere[1],
+}));
+const marchingBefore = app.state.expeditions.length;
+pointer('pointerup'); pointer('pointerdown', 0, 2); pointer('pointerup', 0, 2);
+pointer('pointerdown'); pointer('pointercancel'); pointer('pointerup');
+pointer('pointerdown'); pointer('pointermove', 24); pointer('pointerup', 24);
+assert(app.state.expeditions.length === marchingBefore, 'drag, right click, cancel and stray release send no armies');
+app.view.focusProvince(liveCapital, app.view.camera.zoom, heldCell(liveCapital, livePlayer.id));
+for (let i = 0; i < 2; i++) { pointer('pointerdown'); pointer('pointerup'); }
+assert(app.state.expeditions.length === marchingBefore + 2, 'two normal clicks on home land dispatch two columns, not just a selection');
 
 // --- tap to conquer -------------------------------------------------------
 let frontProv = null;
@@ -460,6 +481,9 @@ frontProv.troops = 40;
 tapTarget.troops = 3;
 const claimedBefore = tapTarget.fronts.get(livePlayer.id)?.tiles.size || 0;
 const tapLossesBefore = livePlayer.stats.troopsLost;
+// Foreign land never accepts a project, even with a hotbar slot still active.
+app.handlers.toggleBuildSlot('city');
+const cityTotal = tapTarget.buildings.city, treasury = livePlayer.gold;
 app.state.paused = true;
 const tile = tapTarget.cells[0], { pixel, gridW } = app.world;
 app.handleMapClick(...app.view.worldToScreen((tile % gridW + .5)*pixel, (Math.floor(tile / gridW)+.5)*pixel));
@@ -468,6 +492,9 @@ assert(tapTarget.nationId === livePlayer.id || tapTarget.fronts.get(livePlayer.i
   'the same map click takes land');
 assert(frontProv.troops < 40, `the tap costs soldiers (${frontProv.troops.toFixed(1)} left)`);
 assert(document.querySelector('#battle-report.show'), 'tap-to-conquer shows the battle card');
+assert(tapTarget.buildings.city === cityTotal && livePlayer.gold === treasury, 'a foreign hotbar click sends troops without building or charging construction gold');
+assert(document.getElementById('battle-report').textContent.includes('Soldiers sent'), 'report shows the size of the dispatch');
+app.cancelBuildMode();
 app.state.paused = false;
 livePlayer.gold = spendBefore;
 
@@ -518,6 +545,7 @@ const summary = {
   logSample: app.state.log.slice(0, 8).map((l) => `${l.type}: ${l.text}`),
   inspectorMode: app.ui.inspectorMode,
 };
+checkFieldClicks(app, assert, () => writeFileSync('tmp-shots/12-field-orders.png', backing.get(mapCanvas).toBuffer('image/png')));
 console.log('\nsummary', JSON.stringify(summary, null, 2));
 console.log('\nerrors:', errors.length ? `\n - ${errors.join('\n - ')}` : 'none');
 process.exit(errors.length ? 1 : 0);

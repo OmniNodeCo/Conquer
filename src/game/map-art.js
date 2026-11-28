@@ -4,6 +4,7 @@ import { TERRAIN } from './worldgen.js';
 import { mix, darken, lighten } from './color.js';
 import { makeRng } from './rng.js';
 import { valueNoise2 } from './noise.js';
+import { SITE_STAMPS, siteOrigin } from './site-shapes.js';
 
 const INK = {
   s: '#453e43', t: '#765237', d: '#315349', g: '#528159', l: '#94b66a',
@@ -23,40 +24,12 @@ const STAMPS = {
   stone: ['..nn...', '.mmmr.m', 'mrrr.rr'],
   field: ['..hh..hh', '.hcc.hcc', '.ca..ca.', '........', '.hh..hh.', 'hcc.hcc.', 'ca..ca..'],
   camp: ['..n..', '.nnc.', 'ncstc', 'sssss'],
-  cottage: ['...b....', '..aab.t.', '.aaabbb.', 'bbbbsbb.', '.cwwcsc.', '.cstccc.', '.sssss..'],
-  keep: ['..w.....', '..s..n..', 'n.s.nmn.', 'mnnnrmr.', 'mwwmrmr.', 'rmmmnmr.', 'rmssmmr.', 'sssssss.'],
+  // Settlement seats are map dots too, even before the first city is built.
+  town: ['.k.', 'kmk', '.k.'],
+  capital: ['.kkk.', 'koook', 'koook', 'koook', '.kkk.'],
   wave: ['...f....', '.ee.ffe.'],
   swell: ['....e..', '..ee.ee'],
   sail: ['...n...', '..nn...', '.nnn...', '...t...', 'baaatbb', '.sssss.'],
-};
-// All six construction stamps share an 11-ink-pixel footprint, centred on the
-// parcel. Strong rooflines and a dark plinth keep them legible over any flag.
-const SITE_SIZE = 11;
-const SITE_STAMPS = {
-  city: [   // A pair of terracotta townhouses with lit windows.
-    '......k....', '.....kvk...', '..k.kvvvk..', '.kvkvvvbbk.', 'kvvbkinkik.',
-    'kbbbkippik.', '.kipkikkik.', '.kikkippik.', '.kipkisrik.', '.kiskisrik.', '.kkkkkkkkk.',
-  ],
-  fort: [   // Crenellated towers, pennant and a dark gate.
-    '....kpp....', '....kp.....', '.ok.k..oko.', '.omkoooomo.', '.umumuumuk.',
-    '.uouuuuouk.', '.ukumukmuk.', '.uuukkkuuk.', '.uoukskuok.', 'kmmukskummk', 'kkkkkkkkkkk',
-  ],
-  aa: [     // Twin barrels pointing skyward on a low field carriage.
-    '.........ok', '........ouk', '.......ouk.', '.....okuk..', '....oukk...',
-    '...oukgk...', '..kdglggk..', '.kdgggdddk.', 'kmmmmmrrrmk', '.kskokoks..', '..kk...kk..',
-  ],
-  port: [   // A white sail above a blue harbour and a timber pier.
-    '.....k.....', '....nk.....', '...nnkn....', '..nnnkon...', '.nnnnkoon..',
-    '.....t.....', '.kbaaaaabk.', 'ejjkbttkkje', 'kcccccctttk', '.tk.je..tk.', '.kkjjfe.kk.',
-  ],
-  factory: [ // Banded stack and a saw-toothed brick works.
-    '.......ooo.', '......ko...', '......kvk..', '......kok..', '...k..kvk..',
-    '..kak.kbk..', '.kaabkbbbk.', 'kvvvvbaabk.', 'kbppbppbbk.', 'kbrrbsstbk.', 'kkkkkkkkkkk',
-  ],
-  silo: [   // Red-tipped silver rocket in a reinforced bunker.
-    '.....v.....', '....kvk....', '....kok....', '...koonk...', '...konmk...',
-    '...kvvbk...', '..ukonmku..', '.ummuuummu.', 'kouukkkumuk', 'kuuuupuupuk', 'kkkkkkkkkkk',
-  ],
 };
 export function stamp(ctx, name, x, y, scale = 1) {
   const rows = STAMPS[name] || SITE_STAMPS[name];
@@ -107,7 +80,8 @@ export class PixelAtlas {
     this.siteSymbols = {};
     this.siteMarks = [];
     for (const key of Object.keys(SITE_STAMPS)) {
-      const image = surface(SITE_SIZE, SITE_SIZE);
+      const size = SITE_STAMPS[key].length;
+      const image = surface(size, size);
       stamp(image.getContext('2d'), key, 0, 0);
       this.siteSymbols[key] = image;
     }
@@ -116,17 +90,12 @@ export class PixelAtlas {
     this.illustrate();
   }
 
-  siteOrigin(cell) {
-    const w = this.world.gridW, half = SITE_SIZE >> 1;
-    return [(cell % w) * 2 + 1 - half, Math.floor(cell / w) * 2 + 1 - half];
-  }
-
   // The ink of an existing roof is an upgrade target, but its transparent
   // corners aren't. Read live sites (also works before the next atlas repaint).
   siteAtPoint(prov, wx, wy) {
     const u = this.world.pixel / 2;
     for (let i = (prov?.sites?.length ?? 0) - 1; i >= 0; i--) {
-      const site = prov.sites[i], [x, y] = this.siteOrigin(site.cell);
+      const site = prov.sites[i], [x, y] = siteOrigin(site.cell, site.key, this.world.gridW);
       const dx = Math.floor(wx / u) - x, dy = Math.floor(wy / u) - y;
       if (INK[SITE_STAMPS[site.key][dy]?.[dx]]) return site;
     }
@@ -258,23 +227,31 @@ export class PixelAtlas {
         ctx.fillRect(x, y-3, 3, 1);
       }
       if (p.nationId === null) continue;
-      const i = p.seatCell, x = i % w * 2, y = Math.floor(i/w)*2;
-      stamp(ctx, this.capitals.has(p.id) ? 'keep' : 'cottage', x-3, y-5);
+      const i = p.seatCell, x = i % w * 2 + 1, y = Math.floor(i/w)*2 + 1;
+      const name = this.capitals.has(p.id) ? 'capital' : 'town', half = STAMPS[name].length >> 1;
+      stamp(ctx, name, x-half, y-half);
       ctx.fillStyle = this.world.nations[owners[i]].color;
-      ctx.fillRect(x-1,y-5,3,2);
+      ctx.fillRect(x, y, 1, 1);
     }
     // Paint sites last: a neighbouring province's trees, village or camp must
     // not erase a player's landmark. Reserve their world bounds for label layout.
     const u = this.world.pixel / 2;
     this.siteMarks.length = 0;
     for (const p of provinces) for (const site of p.sites || []) {
-      const [x, y] = this.siteOrigin(site.cell);
-      ctx.drawImage(this.siteSymbols[site.key], x, y);
-      if (site.level > 1) {
+      const [x, y] = siteOrigin(site.cell, site.key, this.world.gridW);
+      const symbol = this.siteSymbols[site.key], size = symbol.width;
+      ctx.drawImage(symbol, x, y);
+      if (site.level > 1 && site.key === 'city') {
+        // Keep upgraded dots small too; brighten the core rather than adding a badge.
+        ctx.fillStyle = INK.n;
+        ctx.fillRect(x+1, y+2, site.level, 1);
+      } else if (site.level > 1) {
         ctx.fillStyle = INK.p;
-        for (let i = 0; i < site.level; i++) ctx.fillRect(x + 3 + i*2, y + SITE_SIZE-1, 1, 1);
+        // Level pips recolour the base; they cannot expand its build/hit footprint.
+        const base = [...SITE_STAMPS[site.key].at(-1)].flatMap((ch, i) => ch === '.' ? [] : [i]);
+        for (let i = 1; i <= site.level; i++) ctx.fillRect(x + base[Math.floor(i*base.length/(site.level+1))], y + size-1, 1, 1);
       }
-      this.siteMarks.push({ x: x*u, y: y*u, size: SITE_SIZE*u });
+      this.siteMarks.push({ x: x*u, y: y*u, size: size*u });
     }
     return this.paper;
   }

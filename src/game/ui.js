@@ -334,6 +334,7 @@ export class UI {
       <div class="br-head">${result.captured ? 'PROVINCE SECURED' : result.win ? 'FRONT ADVANCED' : 'COSTLY GROUND'}</div>
       <div class="br-sub">${prov.name} · +${result.gained} tiles</div>
       <div class="br-rows">
+        <div class="br-row"><span>Soldiers sent</span><b>${fmtInt(result.sent * 1000)}</b></div>
         <div class="br-row minus"><span>Soldiers lost</span><b>−${lost}</b></div>
         <div class="br-row"><span>Defender losses</span><b>${killed}</b></div>
         <div class="br-row"><span>Ground held</span><b>${pct(result.held / prov.areaPx)}</b></div>
@@ -443,8 +444,8 @@ export class UI {
     if (this.el.bbHint) {
       this.el.bbHint.classList.toggle('placing', !!this.buildMode);
       this.el.bbHint.textContent = this.buildMode
-        ? `PLACING ${BUILDINGS[this.buildMode].name.toUpperCase()} — CLICK A TILE YOU HOLD · ESC CANCELS`
-        : 'Pick a structure, then click a tile on your land · keys 1–6';
+        ? `HOME: ${BUILDINGS[this.buildMode].name.toUpperCase()} + REINFORCE · FOREIGN: SEND TROOPS · ESC CANCELS`
+        : '1–6: build at home · each land order sends 25%';
     }
   }
 
@@ -547,22 +548,20 @@ export class UI {
       .join('');
   }
 
+  orderMessage(text) {
+    // One field readout, replaced on every click. No stream of toast popups.
+    this.lastOrder = { state: this.state, text, until: performance.now() + 3500 };
+    this.el.hint.textContent = text;
+  }
+
   updateHint(state) {
-    const mode = state.mode;
-    let html = '';
-    if (mode === 'nuke') {
-      html = `<b>NUCLEAR STRIKE</b><span>Click an enemy province to launch · <span class="key">Esc</span> cancel</span>`;
-    } else if (this.inspectorMode === 'province' && this.inspectorId !== null) {
-      const prov = state.provinces[this.inspectorId];
-      if (prov && prov.nationId === state.playerNationId) {
-        html = `<span>Click beyond the border to take ground. Tap an enemy foothold at home to reclaim it.</span><span class="key">Space</span> pause`;
-      } else if (prov) {
-        html = `<span>Choose a source army above, set the commitment, then <b>ATTACK</b></span>`;
-      }
+    if (state.mode === 'nuke') {
+      this.el.hint.innerHTML = '<b>NUCLEAR STRIKE</b><span>Choose a target · Esc cancels</span>';
+    } else if (this.lastOrder?.state === state && performance.now() < this.lastOrder.until) {
+      this.el.hint.textContent = this.lastOrder.text;
     } else {
-      html = `<span>Click your land to inspect · click foreign land to advance · drag to pan</span><span class="key">Space</span> pause / resume`;
+      this.el.hint.innerHTML = '<b>SEND 25%</b><span>Click home to reinforce · foreign land to advance · L to inspect safely</span>';
     }
-    this.el.hint.innerHTML = html;
   }
 
   // --------------------------------------------------------------- inspector
@@ -1083,7 +1082,7 @@ export class UI {
             <ul>
               <li>Time runs at one steady pace. Hit <b>Space</b> to pause and resume.</li>
               <li>Click your flag’s <b>Find my land</b> button to locate a province, foothold or building without issuing orders.</li>
-              <li>Tap foreign land to send a quarter of a border army. Each push takes a patch of ground.</li>
+              <li>Every land order sends 25% of a ready garrison. Click home to reinforce or patrol. Click foreign land to advance; without a route, troops stage on your side.</li>
               <li>Tap enemy-coloured ground inside your own province to push them back.</li>
             </ul>
           </div>
@@ -1092,7 +1091,7 @@ export class UI {
             <ul>
               <li><b>Gold</b> flows from provinces every second. Cities and ports raise it.</li>
               <li><b>Manpower</b> refills from population. After 3s of rest, reserves automatically join depleted garrisons.</li>
-              <li>Pick a structure with <b>1–6</b>, then click a tile you hold. Its pixel icon stays there. Build the same type on that tile to upgrade it.</li>
+              <li>With <b>1–6</b> armed, a home dispatch can also place a structure. Its whole site must clear rival land. A foreign click sends soldiers, never a building. Cities use small gold dots.</li>
               <li>Armies cost upkeep every second. Bankrupt armies still fight, but you cannot recruit.</li>
             </ul>
           </div>

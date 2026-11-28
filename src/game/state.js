@@ -6,8 +6,8 @@ import { makeRng } from './rng.js';
 import { generateWorld, TERRAIN, cellCenter } from './worldgen.js';
 import { dist, clamp } from './geom.js';
 import { runAiTurn } from './ai.js';
-import { advanceTiles, heldTiles, sectorGuard, tileOwner } from './fronts.js';
-import { BUILDINGS, canBuild, initBuildings, addBuildingLevels, removeBuildingLevel } from './buildings.js';
+import { advanceTiles, heldCell, heldTiles, sectorGuard, tileOwner } from './fronts.js';
+import { BUILDINGS, canBuild, homePlot, initBuildings, addBuildingLevels, removeBuildingLevel } from './buildings.js';
 export { BUILDINGS, canBuild, buildingCost } from './buildings.js';
 
 export const DIFFICULTY = {
@@ -17,6 +17,8 @@ export const DIFFICULTY = {
 };
 
 export const VICTORY_SHARE = 0.8;
+const TAP_SHARE = 0.25;
+const MIN_COLUMN = 0.6; // troops are measured in thousands
 
 export const TUNING = {
   startGold: 230,
@@ -396,7 +398,12 @@ export function canAttack(state, nationId, targetProv, aim = null) {
   const nation = state.nations[nationId];
   if (!nation?.alive || state.gameOver) return { ok: false, reason: 'Campaign ended' };
   const counter = targetProv.nationId === nationId;
-  const defenderId = counter ? tileOwner(targetProv, aim) : targetProv.nationId;
+  const occupant = tileOwner(targetProv, aim);
+  const defenderId = counter ? occupant : targetProv.nationId;
+  if (occupant != null && occupant !== nationId && occupant !== defenderId) {
+    if (nation.allies.includes(occupant)) return { ok: false, reason: 'That parcel is held by an ally' };
+    if ((nation.truces[occupant] || 0) > state.time) return { ok: false, reason: 'Truce in effect on this parcel' };
+  }
   if (defenderId === nationId) return { ok: false, reason: 'Already yours' };
   if (defenderId !== null) {
     const target = state.nations[defenderId];
@@ -408,7 +415,7 @@ export function canAttack(state, nationId, targetProv, aim = null) {
     }
   }
   const sources = counter ? [{ prov: targetProv, naval: false }] : attackableSources(state, nationId, targetProv);
-  if (!sources.length) return { ok: false, reason: 'No bordering army or naval route' };
+  if (!sources.length) return { ok: false, code: 'no-route', reason: 'No bordering army or naval route' };
   return { ok: true, sources, defenderId };
 }
 
@@ -488,6 +495,7 @@ export function beginAttack(state, nationId, sourceProv, targetProv, troops, nav
       18
     );
     state.expeditions.push({
+      kind: 'fleet',
       id: Math.random().toString(36).slice(2),
       nationId,
       fromId: sourceProv.id,
@@ -520,7 +528,7 @@ export function beginAttack(state, nationId, sourceProv, targetProv, troops, nav
  * One-click assault used by tapping a province on the map: a chunk of the
  * strongest available source marches immediately.
  */
-export function quickAttack(state, nationId, targetProv, share = 0.25, aim = null) {
+export function quickAttack(state, nationId, targetProv, share = TAP_SHARE, aim = null) {
   if (!targetProv) return { ok: false, reason: 'No target' };
   // Respect alliances and truces: a stray tap must not start a forbidden war.
   const check = canAttack(state, nationId, targetProv, aim);
@@ -530,12 +538,71 @@ export function quickAttack(state, nationId, targetProv, share = 0.25, aim = nul
   const ordered = [...sources].sort((a, b) => b.prov.troops - a.prov.troops);
   const pick = ordered.find(s => !s.naval || state.nations[nationId].gold >= TUNING.navalCost);
   if (!pick) return { ok: false, reason: 'Not enough gold for the fleet' };
-  const available = pick.prov.troops * clamp(share, 0, 1);
-  if (available < 0.6) return { ok: false, reason: 'Garrison too thin to attack' };
-  const sent = Math.max(0.6, available);
+  const sent = pick.prov.troops * clamp(share, 0, 1);
+  if (sent < MIN_COLUMN) return { ok: false, reason: 'Garrison too thin to attack' };
   const res = beginAttack(state, nationId, pick.prov, targetProv, sent, pick.naval, aim);
   if (!res.ok) return res;
   return { ...res, source: pick.prov, sent, naval: pick.naval };
+}
+
+// A primary map tap is an order, not a navigation shortcut. Classify the RAW
+// parcel before an assault can change its flag or a roof hit can snap its aim.
+// A hotbar slot adds construction to a friendly dispatch; it never builds on
+// the land an assault just won. Inspector/finder actions do not call this.
+export function orderTile(state, nationId, prov, cell, buildKey = null, siteCell = cell) {
+  if (!state.nations[nationId]?.alive || state.gameOver) return { ok: false, reason: 'Campaign ended' };
+  if (!prov || state.provinces[prov.id] !== prov || !Number.isInteger(cell) || state.world.provinceAt[cell] !== prov.id) {
+    return { ok: false, reason: 'Choose a land tile' };
+  }
+  if (!homePlot(state.world, nationId, prov, cell)) {
+    const attack = quickAttack(state, nationId, prov, TAP_SHARE, cell);
+    if (attack.ok || attack.code !== 'no-route') return attack; // honour truces and alliances
+    // No legal invasion yet: move real soldiers towards the goal on OUR side.
+    // Never invent a fleet or declare war on an intervening neutral country.
+    const goal = cellCenter(state.world, cell);
+    const stations = [];
+    for (const p of nationProvinces(state, nationId)) {
+      const aim = heldCell(p, nationId);
+      if (aim !== null) stations.push({ p, aim, distance: dist(...cellCenter(state.world, aim), ...goal) });
+    }
+    stations.sort((a, b) => a.distance - b.distance);
+    for (const { p, aim } of stations) {
+      const order = marchTo(state, nationId, p, aim);
+      if (order.ok) return { ...order, staging: true };
+    }
+    return { ok: false, reason: 'No ready troops to stage for this advance' };
+  }
+  const march = marchTo(state, nationId, prov, cell);
+  // A rejected project spends no gold. The explicitly advertised troop order
+  // still goes to the clicked parcel, not the (possibly occupied) site anchor.
+  if (march.ok && buildKey) march.construction = build(state, nationId, prov, buildKey, siteCell ?? cell);
+  return march;
+}
+
+export function marchSource(state, nationId, prov) {
+  // Reinforce from an adjoining home garrison. An isolated province can still
+  // send a patrol of its own; never teleport an army across hostile land/sea.
+  let source = null;
+  for (const id of prov.neighbours) {
+    const nb = state.provinces[id];
+    if (nb.nationId === nationId && nb.troops * TAP_SHARE >= MIN_COLUMN && (!source || nb.troops > source.troops)) source = nb;
+  }
+  source ??= prov;
+  return source.troops * TAP_SHARE >= MIN_COLUMN ? source : null;
+}
+
+function marchTo(state, nationId, prov, cell) {
+  const source = marchSource(state, nationId, prov);
+  if (!source) return { ok: false, reason: 'Not enough ready troops to send a detachment' };
+  const sent = source.troops * TAP_SHARE;
+  const fromCell = heldCell(source, nationId);
+  if (cell == null || fromCell == null) return { ok: false, reason: 'No friendly parcel to rally on' };
+  const span = dist(...cellCenter(state.world, fromCell), ...cellCenter(state.world, cell));
+  source.troops -= sent;
+  source.musterAt = state.time + TUNING.musterDelay;
+  state.expeditions.push({ kind: 'march', nationId, fromId: source.id, toId: prov.id, fromCell, aim: cell,
+    troops: sent, startTime: state.time, arriveTime: state.time + clamp(span / 48, 1.3, 5) });
+  return { ok: true, march: true, sent, source, destination: prov };
 }
 
 // Return displaced troops to the nearest friendly administration, if any.
@@ -551,6 +618,7 @@ export function resolveAttackNow(state, { nationId, sourceProv, targetProv: p, t
   const attacker = state.nations[nationId];
   const defender = state.nations[defenderId];
   const counter = p.nationId === nationId;
+  const fromCell = !naval && nationId === state.playerNationId ? heldCell(sourceProv, nationId) : null;
   const guard = sectorGuard(p, defenderId);
   const strength = defenseMultiplier(p) * (naval ? 0.92 : 1);
   const result = resolveBattle(troops, guard, strength, state.rng);
@@ -589,6 +657,7 @@ export function resolveAttackNow(state, { nationId, sourceProv, targetProv: p, t
       if (defender) checkElimination(state, defenderId);
     }
   }
+  result.sent = troops;
   result.captured = !counter && p.nationId === nationId;
   result.gained = tiles.length;
   result.held = heldTiles(p, nationId);
@@ -599,12 +668,13 @@ export function resolveAttackNow(state, { nationId, sourceProv, targetProv: p, t
     defender.stats.troopsLost += result.defenderLosses;
     defender.stats[result.win ? 'battlesLost' : 'battlesWon']++;
   }
-  const tip = tiles.at(-1), w = state.world.gridW, unit = state.world.pixel;
-  const x = (tip % w + 0.5) * unit, y = (Math.floor(tip / w) + 0.5) * unit;
+  const tip = tiles.at(-1) ?? p.seatCell;
+  const [x, y] = cellCenter(state.world, tip);
   const attacking = nationId === state.playerNationId;
   const involved = attacking || defenderId === state.playerNationId;
   const ourLosses = attacking ? result.attackerLosses : result.defenderLosses;
-  addEffect(state, { type: 'battle', x, y, win: result.win, minor: !involved, ttl: 1.3, tiles });
+  addEffect(state, { type: 'battle', x, y, win: result.win, minor: !involved, ttl: 1.3, tiles,
+    ...(fromCell !== null && { fromCell, toCell: tip, nationId }) });
   if (involved) {
     state.stats.troopsLost += ourLosses;
     state.stats[attacking === result.win ? 'battlesWon' : 'battlesLost']++;
@@ -888,7 +958,7 @@ export function update(state, dtRaw) {
     }
   }
 
-  // Naval expeditions.
+  // Columns and fleets only deliver their troops once, on the simulation clock.
   for (let i = state.expeditions.length - 1; i >= 0; i -= 1) {
     const exp = state.expeditions[i];
     if (state.time < exp.arriveTime) continue;
@@ -897,8 +967,13 @@ export function update(state, dtRaw) {
     const source = state.provinces[exp.fromId];
     const attacker = state.nations[exp.nationId];
     if (!attacker || !attacker.alive) continue;
+    if (exp.kind === 'march') {
+      if (homePlot(state.world, exp.nationId, target, exp.aim)) target.troops += exp.troops;
+      else retreat(state, exp.nationId, source, exp.troops); // a transfer is never an invasion
+      continue;
+    }
     if (target.nationId === exp.nationId) {
-      // Reinforce our own land.
+      // A fleet whose destination changed flag while at sea.
       target.troops += exp.troops;
       continue;
     }

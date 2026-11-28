@@ -1,5 +1,6 @@
 // Province totals drive the economy. Sites remember *where* each of those levels lives.
 import { tileOwner } from './fronts.js';
+import { SITE_PARCELS } from './site-shapes.js';
 
 export const BUILDINGS = {
   city: {
@@ -63,12 +64,31 @@ export function siteAt(prov, cell) {
   return prov.sites?.find(site => site.cell === cell);
 }
 
+// The anchor must be dry land that we administer AND actually hold. Even a
+// friendly foothold abroad is not a construction permit. A pier can overhang
+// water, but no part of a new symbol can spill onto someone else's land.
+export function homePlot(world, nationId, prov, cell) {
+  return nationId != null && prov?.nationId === nationId && Number.isInteger(cell) &&
+    world.provinceAt[cell] === prov.id && tileOwner(prov, cell) === nationId;
+}
+
+function fitsBorder(world, nationId, cell, key) {
+  const w = world.gridW, x = cell % w;
+  for (const [dx, dy] of SITE_PARCELS[key]) {
+    const i = cell + dx + dy*w;
+    if (x+dx < 0 || x+dx >= w || i < 0 || i >= world.land.length) return false;
+    if (world.land[i] && !homePlot(world, nationId, world.provinces[world.provinceAt[i]], i)) return false;
+  }
+  return true;
+}
+
 // Inspector/AI orders have no cursor. Prefer upgrading an existing site, or a
 // clear spot near the village; coastal orders prefer the water's edge. No RNG:
 // migrating the same old campaign twice must yield the same landmarks.
-function autoCell(world, prov, key, allowOccupied = false) {
-  const eligible = i => allowOccupied || tileOwner(prov, i) === prov.nationId;
-  const existing = prov.sites.find(s => s.key === key && eligible(s.cell));
+function autoCell(world, prov, key, legacy = false) {
+  const eligible = i => legacy || homePlot(world, prov.nationId, prov, i);
+  const fits = i => legacy || fitsBorder(world, prov.nationId, i, key);
+  const existing = prov.sites.find(s => s.key === key && eligible(s.cell) && fits(s.cell));
   if (existing) return existing.cell;
   const w = world.gridW;
   const distance = (a, b) => Math.max(Math.abs(a % w - b % w), Math.abs(Math.floor(a / w) - Math.floor(b / w)));
@@ -80,7 +100,7 @@ function autoCell(world, prov, key, allowOccupied = false) {
     for (const site of prov.sites) clearance = Math.min(clearance, distance(i, site.cell));
     const inland = key === 'port' && world.land[i-1] && world.land[i+1] && world.land[i-w] && world.land[i+w];
     const score = (inland ? w * 10 : 0) + Math.max(0, 6 - clearance) * 20 + fromVillage;
-    if (score < bestScore) { best = i; bestScore = score; }
+    if (score < bestScore && fits(i)) { best = i; bestScore = score; }
   }
   return best;
 }
@@ -92,7 +112,8 @@ export function buildingCost(prov, key) {
 export function canBuild(state, nationId, prov, key, aim = null) {
   if (!Object.hasOwn(BUILDINGS, key)) return { ok: false, reason: 'Unknown building' };
   const def = BUILDINGS[key];
-  if (prov.nationId !== nationId) return { ok: false, reason: 'Build inside your own province' };
+  if (!state.nations[nationId]?.alive || state.gameOver) return { ok: false, reason: 'Campaign ended' };
+  if (!prov || state.world.provinces[prov.id] !== prov || prov.nationId !== nationId) return { ok: false, reason: 'Build inside your own province' };
   const level = prov.buildings[key];
   if (level >= def.max) return { ok: false, reason: 'Maximum province level reached' };
   if (def.requiresCoastal && !prov.coastal) return { ok: false, reason: 'Requires a coastal province' };
@@ -101,7 +122,8 @@ export function canBuild(state, nationId, prov, key, aim = null) {
   const cell = aim ?? autoCell(state.world, prov, key);
   if (cell === null) return { ok: false, reason: 'No free ground here' };
   if (!Number.isInteger(cell) || state.world.provinceAt[cell] !== prov.id) return { ok: false, reason: 'Choose land in this province' };
-  if (tileOwner(prov, cell) !== nationId) return { ok: false, reason: 'Reclaim this ground before building here' };
+  if (!homePlot(state.world, nationId, prov, cell)) return { ok: false, reason: 'Reclaim this ground before building here' };
+  if (!fitsBorder(state.world, nationId, cell, key)) return { ok: false, reason: 'Too close to foreign land — move the site inside your border' };
   const site = siteAt(prov, cell);
   if (site && site.key !== key) return { ok: false, reason: `Tile in use: ${BUILDINGS[site.key].name}. Choose another tile.` };
   return { ok: true, cell, cost, level };

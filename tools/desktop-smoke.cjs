@@ -62,6 +62,27 @@ app.once('browser-window-created', (_event, win) => {
       })()`);
       assert.equal(located, true, 'The bundled land finder must locate a newly constructed city');
       console.log('Built a city and located its site from the realm atlas.');
+      // The finder centres the actual parcel in the viewport. Send native mouse
+      // input through Chromium, not a call to the simulation or a fake DOM click.
+      const point = await win.webContents.executeJavaScript(`(() => {
+        if (!window.__app.state.paused) document.getElementById('btn-pause').click();
+        const x = Math.round(innerWidth / 2), y = Math.round(innerHeight / 2);
+        if (document.elementFromPoint(x, y)?.id !== 'map') throw Error('The located city is covered by the HUD');
+        return { x, y };
+      })()`);
+      win.focus();
+      for (const type of ['mouseDown', 'mouseUp']) win.webContents.sendInputEvent({ type, ...point, button: 'left', clickCount: 1 });
+      const sent = await win.webContents.executeJavaScript(`new Promise(resolve => {
+        const game = window.__app, hint = document.getElementById('hint-bar');
+        const delivered = () => game.state.expeditions.filter(e => e.kind === 'march' &&
+          e.aim === game.view.locator.cell && e.troops > 0).length === 1;
+        if (delivered()) return resolve(true);
+        const watch = new MutationObserver(() => { if (delivered()) { watch.disconnect(); resolve(true); } });
+        watch.observe(hint, { childList: true });
+        setTimeout(() => { watch.disconnect(); resolve(delivered()); }, 5000);
+      })`);
+      assert.equal(sent, true, 'A primary click on the packaged map must send an army to the city');
+      console.log('One native map click dispatched a reinforcement column offline.');
       app.exit(0);
     } catch (error) { fail(error); }
   });

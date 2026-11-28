@@ -4,7 +4,7 @@
 import { createGame } from './state.js';
 import { restoreBuildings } from './buildings.js';
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 const KEY = 'conquer.save.v1';
 
 export function serialize(state) {
@@ -50,7 +50,7 @@ export function serialize(state) {
 }
 
 export function deserialize(data) {
-  if (!data || ![1, 2, SAVE_VERSION].includes(data.version)) {
+  if (!data || ![1, 2, 3, SAVE_VERSION].includes(data.version)) {
     throw new Error('Unsupported save format');
   }
   const state = createGame({
@@ -79,9 +79,14 @@ export function deserialize(data) {
       for (const i of valid) occupied.add(i);
       prov.fronts.set(id, { tiles: new Set(valid), troops: Number.isFinite(troops) ? Math.max(0, troops) : 0 });
     }
-    restoreBuildings(state.world, prov, saved.b || {}, saved.sites);
     prov.population = saved.pop ?? prov.population;
     prov.value = saved.val ?? prov.value;
+  });
+
+  // A site can reach across a provincial boundary. Migrate legacy totals only
+  // after every neighbouring flag and occupation has been restored.
+  data.provinces.forEach((saved, i) => {
+    if (state.provinces[i]) restoreBuildings(state.world, state.provinces[i], saved.b || {}, saved.sites);
   });
 
   data.nations.forEach((saved, i) => {
@@ -101,7 +106,18 @@ export function deserialize(data) {
     nation.stats = { ...nation.stats, ...(saved.stats || {}) };
   });
 
-  state.expeditions = (data.expeditions || []).map((e) => ({ ...e }));
+  // Before v4 every expedition was a fleet. A restored home march must never
+  // fall through to a naval invasion if its destination has since been lost.
+  const expeditions = Array.isArray(data.expeditions) ? data.expeditions : [];
+  state.expeditions = expeditions.filter(e => {
+    if (!e || !Number.isInteger(e.nationId) || !state.nations[e.nationId] ||
+        !Number.isInteger(e.fromId) || !state.provinces[e.fromId] || !Number.isInteger(e.toId) || !state.provinces[e.toId]) return false;
+    if (!Number.isFinite(e.troops) || e.troops <= 0 || !Number.isFinite(e.startTime) ||
+        !Number.isFinite(e.arriveTime) || e.arriveTime <= e.startTime) return false;
+    if (e.kind === 'fleet' || (data.version < 4 && e.kind == null)) return true;
+    return e.kind === 'march' && Number.isInteger(e.fromCell) && Number.isInteger(e.aim) &&
+      state.world.provinceAt[e.fromCell] === e.fromId && state.world.provinceAt[e.aim] === e.toId;
+  }).map(e => ({ ...e, kind: e.kind ?? 'fleet' }));
   state.log = data.log || [];
   state.player = state.nations[state.playerNationId];
   state.paused = true;
